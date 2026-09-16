@@ -1,0 +1,465 @@
+/* =====================================================================
+ * 发票报销工具 · 补充样式
+ * 只放本项目新增的类，不动 style.css（那套 12 主题样式与发票管理共用）。
+ *
+ * ⚠️ 变量名一律用 style.css 里真实存在的：
+ *    --bg-app / --bg-card / --bg-card-hover / --bg-input / --bg-titlebar
+ *    --border / --border-subtle / --accent / --accent-subtle
+ *    --green / --red / --yellow / --purple / --r / --font
+ *    （没有 --card2 / --input-bg / --text / --ok / --err / --warn）
+ * ===================================================================== */
+
+/* ---------- 表单控件 ---------- */
+.filter-row { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; }
+.fi-label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+.fi, .sel {
+  height: 32px; padding: 0 9px; font-size: 12.5px; font-family: var(--font);
+  color: var(--text-primary); background: var(--bg-input);
+  border: 1px solid var(--border); border-radius: 8px; outline: none;
+}
+.fi:focus, .sel:focus { border-color: var(--border-focus, var(--accent)); }
+.sel {
+  min-width: 108px; cursor: pointer; appearance: none;
+  padding-right: 24px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 14px) 13px, calc(100% - 9px) 13px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.sel option { background: var(--bg-card); color: var(--text-primary); }
+.fi::placeholder { color: var(--text-tertiary); }
+
+/* ---------- 统计小方块 ---------- */
+.stat-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
+.stat-box {
+  flex: 1 1 150px; min-width: 140px; padding: 12px 14px; border-radius: var(--r);
+  border: 1px solid var(--border); background: var(--bg-card);
+}
+.stat-box .sb-num { font-size: 21px; font-weight: 600; letter-spacing: .2px; }
+.stat-box .sb-lab { font-size: 11.5px; color: var(--text-secondary); margin-top: 3px; }
+.stat-box.ok .sb-num { color: var(--green); }
+.stat-box.err .sb-num { color: var(--red); }
+.stat-box.warn .sb-num { color: var(--yellow); }
+.stat-box.mute .sb-num { color: var(--text-secondary); }
+.stat-box.accent .sb-num { color: var(--accent); }
+
+/* ---------- 台账表格 ---------- */
+.td-r { text-align: right; font-variant-numeric: tabular-nums; }
+.td-c { text-align: center; }
+.td-proj { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+td.row-done, tr.row-done td { opacity: .62; }
+/* 状态列的小标签不许折行（否则「未报销」会被挤成两行，很难看） */
+tbody .tag { white-space: nowrap; }
+.td-nowrap { white-space: nowrap; }
+.tag-dup { color: var(--red); border-color: var(--red); background: var(--red-subtle); }
+.tag-pending { color: var(--yellow); border-color: var(--yellow); background: var(--yellow-subtle); }
+.tag-ok { color: var(--green); border-color: var(--green); background: var(--green-subtle); }
+.tag-mute { color: var(--text-secondary); }
+/* 票面标记（退票 / 差额退票 / 改签 / 作废）：票面上就是**红字**印的，
+   台账里也得一眼看见 —— 退票费、改签差价都不是车票钱 */
+.tag-stamp { color: var(--red); border-color: var(--red); background: var(--red-subtle); font-weight: 600; }
+.tag-stamp.stamp-amber { color: var(--yellow); border-color: var(--yellow); background: var(--yellow-subtle); }
+
+/* 表格里的勾选框：跟随当前主题强调色 */
+input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+
+/* ---------- 批量操作条 ---------- */
+.bulk-bar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 10px 12px; margin: 0 0 12px; border-radius: var(--r);
+  border: 1px dashed var(--border); background: var(--bg-input);
+}
+.sel-count { font-size: 12.5px; color: var(--text-secondary); margin-right: 4px; }
+.sel-count b { color: var(--accent); }
+
+/* ---------- 报销单页 ---------- */
+.rep-total {
+  margin-top: 12px; padding: 10px 14px; border-radius: var(--r);
+  border: 1px solid var(--border); background: var(--bg-input);
+  font-size: 13px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+}
+.rep-total b { font-size: 15px; }
+.rep-total .rep-att-note { color: var(--text-tertiary); font-size: 11.5px; align-self: center; }
+
+/* ---------- 生成文件列表 ---------- */
+.out-list { display: flex; flex-direction: column; gap: 8px; }
+.out-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--bg-card); font-size: 12.5px;
+}
+.out-item .oi-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.out-item .oi-time { color: var(--text-secondary); font-size: 11.5px; }
+.out-item .oi-kind {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 999px;
+  background: var(--accent-subtle); color: var(--accent); white-space: nowrap;
+}
+
+/* ---------- 统计页表格网格 ---------- */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+.stat-grid .card { margin: 0; }
+.agg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.agg-table th, .agg-table td { padding: 5px 7px; border-bottom: 1px solid var(--border); }
+.agg-table th { text-align: left; color: var(--text-secondary); font-weight: 500; }
+.agg-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.agg-table tr:last-child td { border-bottom: none; }
+.agg-table td.name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agg-table tr.total-row td { font-weight: 600; border-top: 1px solid var(--border); }
+
+/* 统计页里上下两块之间留点气 */
+#page-stats .stat-row { margin-top: 0; margin-bottom: 4px; }
+
+/* ---------- 台账新列：凭证类型 / 行程明细 ---------- */
+.td-dash { color: var(--text-tertiary); }
+.td-trip {
+  max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-secondary); font-size: 12px;
+}
+.tag.ct { font-weight: 600; }
+.ct-inv    { color: var(--accent);        border-color: var(--accent); background: var(--accent-subtle); }
+.ct-train  { color: var(--green);         border-color: var(--green);  background: var(--green-subtle); }
+.ct-air    { color: var(--purple);        border-color: var(--purple); background: var(--accent-subtle); }
+.ct-board  { color: var(--purple);        border-color: var(--purple); background: var(--accent-subtle); }
+.ct-taxi   { color: var(--yellow);        border-color: var(--yellow); background: var(--yellow-subtle); }
+.ct-img    { color: var(--text-secondary); }
+.ct-other  { color: var(--text-tertiary); }
+
+/* ---------- 凭证明细弹层 ---------- */
+.modal.modal-lg {
+  width: 640px; max-width: 94vw; max-height: 88vh; overflow-y: auto;
+}
+/* 明细内容自己排，别继承 .modal-text 的行高/灰度 */
+.modal-text .id-top,
+.modal-text .id-badges,
+.modal-text .id-sec { color: var(--text-primary); line-height: 1.5; }
+
+.id-top {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 18px;
+  padding: 13px 15px; border-radius: var(--r);
+  background: var(--bg-input); border: 1px solid var(--border);
+}
+.id-main { min-width: 0; flex: 1; }
+.id-no {
+  font-family: var(--font-mono); font-size: 17px; font-weight: 600; letter-spacing: .4px;
+  color: var(--text-primary); word-break: break-all;
+}
+.id-none { font-family: var(--font); font-size: 13px; font-weight: 400; color: var(--text-tertiary); }
+.id-sub { font-size: 12px; color: var(--text-secondary); margin-top: 5px; }
+.id-amt { flex: none; text-align: right; }
+.id-amt-n {
+  font-family: var(--font-mono); font-size: 20px; font-weight: 640;
+  color: var(--accent); white-space: nowrap;
+}
+.id-amt-l { font-size: 11px; color: var(--text-tertiary); margin-top: 3px; }
+
+.id-badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; }
+.id-badges .tag { margin-left: 0; }
+
+.id-sec { margin-top: 15px; }
+.id-sec-t {
+  font-size: 11px; font-weight: 600; letter-spacing: .6px; color: var(--text-tertiary);
+  padding-bottom: 6px; margin-bottom: 9px; border-bottom: 1px solid var(--border-subtle);
+}
+.id-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 18px; }
+.id-cell { min-width: 0; }
+.id-cell.wide { grid-column: 1 / -1; }
+.id-k { font-size: 11px; color: var(--text-tertiary); }
+.id-v {
+  font-size: 12.5px; color: var(--text-primary); line-height: 1.55;
+  margin-top: 2px; word-break: break-word;
+}
+.id-v .mono { font-family: var(--font-mono); font-size: 12px; }
+.id-v .id-na { color: var(--text-tertiary); }
+.id-v .id-money { font-family: var(--font-mono); font-weight: 600; color: var(--accent); }
+.id-v .id-trip { line-height: 1.75; }
+.id-v .id-tip { color: var(--yellow); }
+
+.id-file {
+  padding: 10px 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--border-subtle); background: var(--bg-input);
+}
+.id-file-name { font-family: var(--font-mono); font-size: 12px; word-break: break-all; color: var(--text-primary); }
+.id-file-dir { font-size: 11px; color: var(--text-tertiary); word-break: break-all; margin-top: 4px; }
+.id-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+/* 「合并时少了几张」的说明列表 */
+.miss-list {
+  margin: 9px 0 0; padding: 10px 14px 10px 26px; list-style: disc;
+  border: 1px solid var(--border-subtle); border-radius: var(--r-sm);
+  background: var(--bg-input); max-height: 240px; overflow: auto;
+}
+.miss-list li { font-size: 12.5px; line-height: 1.6; margin: 5px 0; word-break: break-all; }
+.miss-list li + li { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border-subtle); }
+
+@media (max-width: 620px) {
+  .id-grid { grid-template-columns: 1fr; }
+}
+
+/* ---------- 删除类按钮（删除/清空这类危险操作统一用这个红） ---------- */
+.btn-danger { color: var(--red); border-color: var(--red); background: var(--red-subtle); }
+.btn-danger:hover { background: var(--red); color: #fff; border-color: var(--red); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---------- 台账查询条 ---------- */
+.filter-summary {
+  margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--border);
+  font-size: 12px; color: var(--text-secondary); line-height: 1.6;
+}
+.filter-summary b { color: var(--accent); }
+.range-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.range-tilde { color: var(--text-tertiary); font-size: 12px; }
+.bulk-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+
+/* ---------- 报销单页：单据类型 / 输出格式 ---------- */
+.opt-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+.opt-label { font-size: 12.5px; color: var(--text-secondary); min-width: 60px; }
+.opt-row .pill-group { flex: 1; }
+
+/* ---------- 生成文件列表 ---------- */
+.out-item.out-gone { opacity: .55; }
+.out-item .oi-name .tag { margin-left: 6px; }
+@media (max-width: 760px) {
+  .out-item { flex-wrap: wrap; }
+  .out-item .oi-name { flex-basis: 100%; }
+}
+
+/* ---------- 差旅费补助（报销单页：人数 × 天数 × 标准，自己填） ---------- */
+.alw-block {
+  margin-top: 12px; padding: 10px 12px 12px;
+  border: 1px dashed var(--border); border-radius: var(--r);
+  background: var(--accent-subtle, transparent);
+}
+.alw-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.alw-head input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+.alw-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.alw-hint { font-size: 11.5px; color: var(--text-tertiary); }
+.alw-box { margin-top: 10px; }
+.alw-table { width: 100%; border-collapse: collapse; }
+.alw-table th {
+  font-size: 11.5px; font-weight: 600; color: var(--text-secondary);
+  text-align: center; padding: 4px 6px; border-bottom: 1px solid var(--border);
+}
+.alw-table td { padding: 3px 4px; border-bottom: 1px dashed var(--border-subtle); }
+.alw-table tr:last-child td { border-bottom: none; }
+.alw-in { width: 100%; height: 30px; font-size: 12.5px; }
+.alw-num { text-align: right; font-variant-numeric: tabular-nums; }
+.alw-del { text-align: center; }
+.alw-foot { display: flex; align-items: center; gap: 14px; margin-top: 9px; font-size: 12.5px; }
+.alw-sum { color: var(--text-secondary); }
+.alw-sum b { color: var(--accent); font-size: 13.5px; }
+.alw-grand { color: var(--text-secondary); }
+.alw-grand b { color: var(--text-primary); }
+
+/* 模板二版式专用：出差补助（按人）—— 姓名 / 票据合计(自动) / 补助金额(填) / 实际(自动) */
+#jy-block .alw-head { cursor: default; }
+.jy-in { width: 100%; height: 30px; font-size: 12.5px; }
+.jy-fill { display: flex; align-items: center; margin-left: auto; }
+.jy-fill .fi { height: 28px; font-size: 12.5px; }
+
+/* ---------- 台账里「跟在发票后面的附件」标记 ---------- */
+.att-mark { color: var(--accent); font-weight: 700; margin-right: 2px; }
+.tag-att { color: var(--accent); border-color: var(--accent); background: var(--accent-subtle); }
+tr.row-att td { background: var(--accent-subtle); }
+
+/* =====================================================================
+ * 出行人核对（三层兜底 + 人工核对里的「人工」那一步）
+ * 工具条按钮上的角标 + 核对弹层里的那张表
+ * ===================================================================== */
+.tv-badge {
+  display: inline-block; margin-left: 6px; min-width: 17px; padding: 0 5px;
+  border-radius: 9px; background: var(--yellow); color: #fff;
+  font-size: 11px; line-height: 17px; text-align: center; vertical-align: 1px;
+}
+.tv-badge[hidden] { display: none; }
+
+/* 核对表列多，比 modal-lg 再宽一档 */
+.modal.modal-xl { width: 1080px; max-width: 96vw; max-height: 88vh; overflow-y: auto; }
+
+.tvr-stats {
+  display: flex; flex-wrap: wrap; gap: 7px 16px; align-items: baseline;
+  padding: 9px 13px; margin-bottom: 10px; border-radius: var(--r);
+  background: var(--bg-input); border: 1px solid var(--border);
+  font-size: 12.5px; color: var(--text-secondary);
+}
+.tvr-st b { color: var(--text-primary); font-size: 14.5px; margin-right: 3px; }
+.tvr-st.is-need b { color: var(--yellow); }
+.tvr-st.is-err, .tvr-st.is-err b { color: var(--red); }
+.tvr-st.is-ok b { color: var(--green); }
+
+.tvr-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.tvr-bar .ck {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12.5px; color: var(--text-secondary); cursor: pointer;
+}
+.tvr-sp { flex: 1 1 auto; }
+.tvr-bulk { width: 152px; height: 30px; }
+
+.tvr-wrap {
+  border: 1px solid var(--border); border-radius: var(--r);
+  overflow: auto; max-height: 52vh; background: var(--bg-card);
+}
+.tvr-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tvr-tbl thead th {
+  position: sticky; top: 0; z-index: 2; text-align: left; white-space: nowrap;
+  padding: 8px 10px; font-weight: 600; color: var(--text-secondary);
+  background: var(--table-header-bg); border-bottom: 1px solid var(--border);
+}
+.tvr-tbl td {
+  padding: 7px 10px; border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary); vertical-align: middle;
+}
+.tvr-tbl tbody tr:hover td { background: var(--table-row-hover); }
+.tvr-ck { width: 30px; }
+.tvr-idx { width: 40px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.tvr-inv { min-width: 240px; }
+.tvr-t1 { display: flex; align-items: center; gap: 6px; }
+.tvr-t2 { margin-top: 2px; font-size: 11.5px; color: var(--text-tertiary); }
+.tvr-ph { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+.tvr-src { white-space: nowrap; }
+.tvr-inp { width: 116px; height: 28px; }
+/* 系统预填的名字：斜体虚线，表示「这是我猜的，改掉就是你的」 */
+.tvr-inp.is-auto {
+  font-style: italic; color: var(--text-secondary);
+  border-style: dashed; border-color: var(--border);
+}
+.tvr-row.is-need td { background: var(--yellow-subtle); }
+.tvr-row.is-done td { opacity: .58; }
+.tvr-row.is-need:hover td { background: var(--yellow-subtle); }
+
+/* =====================================================================
+ * 出行人核对 —— 「三层兜底 + 人工核对」里的那半截人工
+ * 工具条按钮上的角标 + 核对弹层里的那张表
+ * ===================================================================== */
+.tv-badge {
+  display: inline-block; margin-left: 6px; min-width: 17px; padding: 0 5px;
+  border-radius: 9px; background: var(--yellow); color: #fff;
+  font-size: 11px; line-height: 17px; text-align: center; vertical-align: 1px;
+}
+.tv-badge[hidden] { display: none; }
+
+/* 核对表列多，比 modal-lg 再宽一档 */
+.modal.modal-xl { width: 1060px; max-width: 96vw; max-height: 88vh; overflow-y: auto; }
+
+.tvr-stats {
+  display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center;
+  padding: 9px 12px; margin-bottom: 10px; border-radius: var(--r);
+  background: var(--bg-input); border: 1px solid var(--border);
+  font-size: 12.5px; color: var(--text-secondary);
+}
+.tvr-st b { color: var(--text-primary); font-size: 14px; margin-right: 1px; }
+.tvr-st.is-need b { color: var(--yellow); }
+.tvr-st.is-err, .tvr-st.is-err b { color: var(--red); }
+.tvr-st.is-ok b { color: var(--green); }
+
+.tvr-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 10px; }
+.tvr-bar .ck {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12.5px; color: var(--text-secondary); cursor: pointer; user-select: none;
+}
+.tvr-sp { flex: 1 1 auto; }
+.tvr-bulk { width: 150px; }
+
+.tvr-wrap {
+  border: 1px solid var(--border); border-radius: var(--r);
+  overflow: auto; max-height: 54vh; background: var(--bg-card);
+}
+.tvr-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tvr-tbl thead th {
+  position: sticky; top: 0; z-index: 2; white-space: nowrap;
+  background: var(--table-header-bg, var(--bg-input));
+  color: var(--text-secondary); font-weight: 600; text-align: left;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+}
+.tvr-tbl td {
+  padding: 7px 10px; border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary); vertical-align: middle;
+}
+.tvr-tbl tbody tr:hover td { background: var(--table-row-hover); }
+.tvr-ck { width: 30px; text-align: center; }
+.tvr-idx { width: 38px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.tvr-inv { min-width: 220px; }
+.tvr-t1 { display: flex; align-items: center; gap: 6px; }
+.tvr-t2 { font-size: 11.5px; color: var(--text-tertiary); margin-top: 2px; }
+.tvr-ph { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+.tvr-src { white-space: nowrap; }
+.tvr-inp { width: 116px; height: 28px; }
+/* 要核对的整行淡黄底，已核对的一眼能跳过 */
+.tvr-row.is-need td { background: var(--yellow-subtle); }
+.tvr-row.is-done td { opacity: .58; }
+
+/* =====================================================================
+   上传本机文件夹（服务器模式 / NAS）
+   ---------------------------------------------------------------------
+   容器看不见用户电脑的磁盘，所以「我要处理我自己电脑上那个文件夹」这件事
+   得先把文件搬上 NAS。这一块就是那个入口。
+   ===================================================================== */
+.up-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 10px; flex-wrap: wrap;
+}
+.up-row .btn { display: inline-flex; align-items: center; gap: 7px; }
+.up-ic { width: 15px; height: 15px; stroke: currentColor; flex: none; }
+.up-hint { font-size: 12px; color: var(--text-tertiary); line-height: 1.6; }
+.up-hint b { color: var(--text-secondary); font-weight: 600; }
+.up-hint .mono { font-family: var(--font-mono); word-break: break-all; }
+
+/* 拖文件夹进来时盖一层提示：松手就开始传（用 fixed，不去动 .page 的定位） */
+.page.drop-on::after {
+  content: "把文件夹拖到这里，松手就开始上传";
+  position: fixed; inset: 14px; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--accent); border-radius: var(--r-lg);
+  background: var(--accent-subtle);
+  color: var(--accent); font-size: 15px; font-weight: 600;
+  pointer-events: none;
+}
+
+/* ---------- 账号与权限（设置页） ---------- */
+.usr-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 12px; margin-bottom: 8px; flex-wrap: wrap;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border-subtle); border-radius: var(--r-sm);
+}
+.usr-row.is-off { opacity: .55; }
+.usr-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.usr-line b { font-size: 13px; }
+.usr-tag {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap;
+  background: var(--accent-subtle); color: var(--accent);
+}
+.usr-tag.warn { background: var(--yellow-subtle); color: var(--yellow); }
+.usr-tag.me { background: var(--green-subtle); color: var(--green); }
+.usr-meta { color: var(--text-secondary); font-size: 12px; }
+.usr-ops { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.usr-ops .fi { padding: 3px 6px; font-size: 12px; width: auto; }
+
+/* ---------- 台账数据库信息 ---------- */
+.kv-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0 20px;
+}
+.kv {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 6px 0; font-size: 12.5px;
+  border-bottom: 1px dashed var(--border-subtle);
+}
+.kv span { color: var(--text-secondary); white-space: nowrap; }
+.kv b { font-weight: 600; text-align: right; word-break: break-all; }
+.kv b.warn { color: var(--yellow); }
+
+/* ---------- 审计日志弹层 ---------- */
+.audit-wrap {
+  max-height: 56vh; overflow: auto;
+  border: 1px solid var(--border-subtle); border-radius: var(--r-sm);
+}
+.audit-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.audit-tbl th {
+  position: sticky; top: 0; z-index: 1; text-align: left; white-space: nowrap;
+  padding: 7px 9px; font-weight: 600; color: var(--text-secondary);
+  background: var(--bg-card); border-bottom: 1px solid var(--border);
+}
+.audit-tbl td { padding: 6px 9px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+.audit-tbl tr.bad td { background: var(--red-subtle); }
+.audit-tbl .nowrap { white-space: nowrap; color: var(--text-secondary); }

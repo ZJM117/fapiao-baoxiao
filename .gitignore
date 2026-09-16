@@ -1,0 +1,35 @@
+# 运行数据 —— 真实台账、配置、生成物，绝对不要传到公开仓库
+发票台账.xlsx
+config.json
+台账备份/
+缓存/
+输出/
+browser_debug/
+回收站/
+票据/
+*.log
+ui_port.txt
+
+# ⚠️ 台账真身（SQLite）：里面有全部发票数据、账号口令哈希、审计记录，
+#    万一跟着代码进了仓库 = 数据泄露到公网。WAL 模式还会带 -wal / -shm 两个伴生文件。
+发票台账.db
+发票台账.db-wal
+发票台账.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# 给人核对的样张（里面有真实人名、手机号）
+*预览*.txt
+*_预览.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

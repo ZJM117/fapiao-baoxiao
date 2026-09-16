@@ -1,0 +1,36 @@
+# 别把本机的运行数据、测试产物、真实台账打进镜像
+缓存/
+输出/
+台账备份/
+browser_debug/
+
+# 真实数据与配置（容器里由 /data 卷提供，不要跟着镜像走）
+发票台账.xlsx
+# ⚠️ 台账真身现在是这个 SQLite 库（WAL 模式下还会带 -wal / -shm 两个伴生文件），
+#    一律别打进镜像 —— 镜像里带上真实台账，等于把数据散到每一台拉过镜像的机器上
+发票台账.db
+发票台账.db-wal
+发票台账.db-shm
+*.db
+*.db-wal
+*.db-shm
+config.json
+run.log
+launch.log
+ui_port.txt
+*.txt
+
+# 测试与文档（镜像里用不上）
+测试/
+*.md
+docs/
+.github/
+.gitignore
+
+# 各种临时产物
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+.DS_Store

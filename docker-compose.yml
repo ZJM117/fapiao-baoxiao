@@ -1,0 +1,41 @@
+# =====================================================================
+#  发票报销工具 —— docker compose 一键部署
+#
+#    docker compose up -d            启动
+#    docker compose logs -f          看日志（启动后会打印该访问哪个地址）
+#    docker compose down             停掉（数据在卷里，不会丢）
+#
+#  镜像从哪来见下面 services 里的那段说明（默认＝从 GitHub 拉现成的）。
+#  另外有三处要按自己的情况改：口令、两个卷的路径、（必要时）端口。
+# =====================================================================
+services:
+  fapiao:
+    # ── 用哪个镜像（二选一）──────────────────────────────────────────
+    # ① 推荐：拉 GitHub 上自动构建好的镜像 —— NAS 不用构建，几十秒就起
+    #    （镜像由仓库里的 GitHub Actions 自动构建并推送，路径必须全小写）
+    #    ⚠️ 镜像若是私有的，先在 NAS 上登录一次：docker login ghcr.io
+    #       （用户名填 GitHub 用户名，密码填一个有 read:packages 权限的 PAT）
+    image: ghcr.io/zjm117/fapiao-baoxiao:latest
+    #
+    # ② 想在这台机器上现构建（第一次要几分钟：下 chromium + 中文字体）：
+    #    把上面那行 image 注释掉，放开下面这行，然后 docker compose up -d --build
+    # build: .
+    container_name: fapiao-baoxiao
+    restart: unless-stopped
+    ports:
+      # 左边是 NAS 上的端口，被占用就改左边；右边是容器里的，别动
+      - "8766:8766"
+    environment:
+      FB_SERVER: "1"
+      FB_HOST: "0.0.0.0"
+      FB_PORT: "8766"
+      FB_DATA_DIR: "/data"
+      FB_SOURCE: "/票据"
+      # ⚠️ 改成你自己的口令。留空字符串=不需要登录（只在完全可信的内网这么干）
+      FB_PASSWORD: "change-me"
+      TZ: "Asia/Shanghai"
+    volumes:
+      # 台账 / 配置 / 缓存 / 输出 / 回收站都在这里 —— 千万别删，删了等于清空
+      - ./data:/data
+      # 要报销的票据放这里（PDF / OFD / XML / 图片都行），界面上填 /票据
+      - ./票据:/票据

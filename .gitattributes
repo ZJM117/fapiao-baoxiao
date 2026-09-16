@@ -1,0 +1,17 @@
+# 换行统一：镜像是在 Linux 上构建的，不受 Windows 的 CRLF 影响
+* text=auto
+
+# ⚠️ 启动 bat 是 GBK 编码 + CRLF 的，git 千万别动它的换行或编码 ——
+#    被转成 LF 之后 cmd 会认不出内容（表现是一闪而过或提示找不到文件）
+*.bat -text
+*.cmd -text
+
+# 二进制文件别当文本处理
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.xlsx binary
+*.db binary
+*.zip binary

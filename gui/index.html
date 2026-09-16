@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<title>发票报销工具</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="extra.css">
+</head>
+<body>
+
+<div class="titlebar">
+  <div class="titlebar-drag pywebview-drag-region">
+    <div class="tb-logo"></div>
+    <div class="tb-title">发票报销工具</div>
+  </div>
+  <div class="tb-ctrls">
+    <button class="tb-btn" id="btn-min" title="最小化">&#8212;</button>
+    <button class="tb-btn" id="btn-max" title="最大化/还原">&#9723;</button>
+    <button class="tb-btn tb-close" id="btn-close" title="关闭">&#10005;</button>
+  </div>
+</div>
+
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <div class="sb-logo">报</div>
+      <div class="sb-text-wrap">
+        <div class="sb-name">发票报销</div>
+        <div class="sb-ver">台账 · 查重 · 单据</div>
+      </div>
+    </div>
+
+    <nav class="sb-nav">
+      <div class="sb-group-header">日常</div>
+      <button class="nav-item active" data-page="page-in">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span class="sb-text-wrap">凭证入库</span>
+      </button>
+      <button class="nav-item" data-page="page-ledger">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
+        </svg>
+        <span class="sb-text-wrap">凭证台账</span>
+      </button>
+      <button class="nav-item" data-page="page-report">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/>
+        </svg>
+        <span class="sb-text-wrap">报销单</span>
+      </button>
+      <button class="nav-item" data-page="page-stats">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+        <span class="sb-text-wrap">统计汇总</span>
+      </button>
+      <div class="sb-group-header">系统</div>
+      <button class="nav-item" data-page="page-log">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>
+        </svg>
+        <span class="sb-text-wrap">运行记录</span>
+      </button>
+      <button class="nav-item" data-page="page-set">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        <span class="sb-text-wrap">设置</span>
+      </button>
+    </nav>
+
+    <div class="sb-foot">
+      <button id="btn-theme" title="选择界面主题（12 套）">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;stroke:currentColor">
+          <circle cx="13.5" cy="6.5" r="1.4"/><circle cx="17.5" cy="10.5" r="1.4"/><circle cx="8.5" cy="7.5" r="1.4"/><circle cx="6.5" cy="12.5" r="1.4"/>
+          <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.29-.29-.44-.65-.44-1.12a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.56-2.5 5.56-5.55C21.97 6.01 17.46 2 12 2z"/>
+        </svg>
+        <span class="sb-text-wrap">主题外观</span>
+      </button>
+      <button id="btn-collapse" title="收起 / 展开侧边栏">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;stroke:currentColor">
+          <polyline points="15 18 9 12 15 6"/>
+        </svg>
+        <span class="sb-text-wrap">收起侧栏</span>
+      </button>
+      <button id="btn-quit" title="结束程序（关闭本地服务）">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;stroke:currentColor">
+          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+        </svg>
+        <span class="sb-text-wrap">退出程序</span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- ================= 发票入库 ================= -->
+    <div class="page active" id="page-in">
+      <div class="page-header">
+        <div>
+          <div class="page-title">凭证入库建账</div>
+          <div class="page-sub">遍历你整理好的文件夹 → 解析发票（PDF / OFD / XML / zip）以及火车票 / 飞机行程单 / 打车行程单 / 登机牌 / 图片凭证 → 登记到 Excel 台账，同一张票自动查重</div>
+        </div>
+        <div class="status-badge ready" id="status">
+          <span class="status-dot"></span><span id="status-text">就绪</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">凭证文件夹</div>
+          <div class="card-hint">要报销的发票、行程单、车票都放一个文件夹里，程序会挨个读</div>
+        </div>
+        <div class="pill-group" id="scope-pills">
+          <button class="pill active" data-scope="deep">含子文件夹</button>
+          <button class="pill" data-scope="flat">只看当前层</button>
+        </div>
+        <div class="src-row">
+          <input class="path-input" id="src-path" type="text" spellcheck="false"
+                 placeholder="凭证文件夹的完整路径，或点右侧「选择文件夹…」">
+          <button class="btn" id="btn-pick">选择文件夹…</button>
+          <button class="btn btn-ghost" id="btn-src-reset" title="恢复默认路径">恢复默认</button>
+        </div>
+        <div class="src-note" id="src-note"></div>
+
+        <!-- 服务器模式（NAS）专用：容器看不见你这台电脑的磁盘，
+             想让「本机的文件夹」参与入库，就得先传上去 -->
+        <div class="up-row" id="up-row" hidden>
+          <input type="file" id="up-input" webkitdirectory multiple style="display:none">
+          <button class="btn" id="btn-upload"
+                  title="把你这台电脑上的文件夹传到 NAS 上处理：原样保留里面的子目录，发票和它的行程单还是待在一起">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="up-ic">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            上传本机文件夹…
+          </button>
+          <span class="up-hint" id="up-hint"></span>
+        </div>
+        <div class="progress-wrap" id="up-progress" style="display:none">
+          <div class="progress-top">
+            <span id="up-label">准备中…</span>
+            <span id="up-num">0 / 0</span>
+          </div>
+          <div class="progress-track"><div class="progress-bar" id="up-bar"></div></div>
+        </div>
+
+        <div class="filter-row" style="margin-top:14px">
+          <label class="fi-label">本批报销人<input class="fi" id="in-person" type="text" placeholder="可留空" style="width:120px"></label>
+          <label class="fi-label">备注批次<input class="fi" id="in-batch" type="text" placeholder="如 9月现场审计" style="width:180px"></label>
+        </div>
+
+        <div class="row-actions" style="margin-top:18px">
+          <button class="btn btn-primary btn-lg" id="btn-import">开始入库</button>
+          <button class="btn btn-lg" id="btn-open-ledger">打开台账文件</button>
+          <button class="btn btn-ghost btn-lg" id="btn-open-out">打开输出目录</button>
+        </div>
+        <div class="progress-wrap" id="progress-wrap" style="display:none">
+          <div class="progress-top">
+            <span id="progress-label">准备中…</span>
+            <span id="progress-num">0 / 0</span>
+          </div>
+          <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">入库结果</div>
+          <div class="card-hint" id="in-hint">尚未入库</div>
+        </div>
+        <div class="stat-row" id="in-stats"></div>
+        <div class="table-wrap" id="dup-wrap" style="display:none;margin-top:14px">
+          <table>
+            <thead><tr><th style="width:150px">发票号码</th><th>说明</th></tr></thead>
+            <tbody id="dup-body"></tbody>
+          </table>
+        </div>
+        <div class="table-wrap" id="manual-wrap" style="display:none;margin-top:14px">
+          <table>
+            <thead><tr><th style="width:60px">#</th><th>文件</th><th style="width:360px">为什么没认出来</th></tr></thead>
+            <tbody id="manual-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 发票台账 ================= -->
+    <div class="page" id="page-ledger">
+      <div class="page-header">
+        <div>
+          <div class="page-title">凭证台账</div>
+          <div class="page-sub">多条件查询 → 勾选后批量标已报销 / 出报销单 / 合并 PDF；不需要的记录可以直接删掉；台账本身就是一个 Excel，可直接打开改</div>
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-sm" id="btn-export">导出统计 Excel</button>
+          <button class="btn btn-sm" id="btn-open-ledger2">打开台账文件</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="filter-row">
+          <label class="fi-label">状态
+            <select class="sel" id="f-status"><option value="">全部</option>
+              <option value="未报销">未报销</option><option value="已报销">已报销</option></select>
+          </label>
+          <label class="fi-label">凭证类型
+            <select class="sel" id="f-ctype"><option value="">全部</option></select>
+          </label>
+          <label class="fi-label">费用类别
+            <select class="sel" id="f-category"><option value="">全部</option></select>
+          </label>
+          <label class="fi-label">报销批次
+            <select class="sel" id="f-batch"><option value="">全部</option></select>
+          </label>
+          <label class="fi-label">报销人
+            <select class="sel" id="f-person"><option value="">全部</option></select>
+          </label>
+          <label class="fi-label">月份
+            <select class="sel" id="f-month"><option value="">全部</option></select>
+          </label>
+          <label class="fi-label">金额区间
+            <span class="range-wrap">
+              <input class="fi" id="f-min" type="text" placeholder="最小" style="width:76px">
+              <span class="range-tilde">~</span>
+              <input class="fi" id="f-max" type="text" placeholder="最大" style="width:76px">
+            </span>
+          </label>
+          <label class="fi-label">关键词
+            <input class="fi" id="f-kw" type="text" placeholder="发票号 / 销方 / 行程 / 项目" style="width:190px">
+          </label>
+          <button class="btn btn-primary" id="btn-refresh">查询</button>
+          <button class="btn btn-ghost" id="btn-reset-filter">清空条件</button>
+        </div>
+        <div class="filter-summary" id="f-summary"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">台账明细</div>
+          <div class="card-hint" id="ledger-hint">加载中…</div>
+        </div>
+        <div class="bulk-bar" id="bulk-bar">
+          <span class="sel-count" id="sel-count">未选中</span>
+          <button class="btn btn-sm" id="btn-sel-all">全选本页</button>
+          <button class="btn btn-sm btn-primary" id="btn-mark-done">标为已报销</button>
+          <button class="btn btn-sm" id="btn-mark-undone">标为未报销</button>
+          <label class="fi-label" style="margin-left:8px">类别
+            <select class="sel" id="set-category"><option value="">选类别</option></select>
+          </label>
+          <button class="btn btn-sm" id="btn-apply-cat">应用</button>
+          <button class="btn btn-sm" id="btn-set-tv"
+                  title="给选中的凭证指定出行人（打车行程单票面没人名，认不出时在这里手填）">设置出行人</button>
+          <button class="btn btn-sm" id="btn-review-tv"
+                  title="把整本台账的出行人过一遍：票面读到的、手机号译出的、文件夹推来的摆在一起，逐条确认或改掉；确认过的就不再提醒">出行人核对<span
+                  class="tv-badge" id="tv-todo-badge" hidden>0</span></button>
+          <button class="btn btn-sm btn-primary" id="btn-to-report">生成报销单 →</button>
+          <span class="bulk-sep"></span>
+          <button class="btn btn-sm" id="btn-reparse"
+                  title="按最新的识别规则重读选中凭证的原件，刷新票面字段（状态/类别/报销人不动）">重新识别</button>
+          <button class="btn btn-sm btn-danger" id="btn-del-sel">删除选中</button>
+          <button class="btn btn-sm btn-danger" id="btn-clear-ledger">清空台账</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:34px"><input type="checkbox" id="ck-all"></th>
+              <th class="td-idx">#</th><th style="width:86px">状态</th>
+              <th style="width:92px">凭证类型</th>
+              <th style="width:84px">出行人</th>
+              <th style="width:92px">开票日期</th><th style="width:170px">发票号码</th>
+              <th style="min-width:250px">行程 / 明细</th>
+              <th style="width:180px">销方名称</th>
+              <th style="min-width:170px">项目 / 事由</th>
+              <th style="width:96px">费用类别</th>
+              <th style="width:100px" class="td-r">价税合计</th>
+              <th style="width:110px">报销批次</th>
+            </tr></thead>
+            <tbody id="ledger-body">
+              <tr><td colspan="13" class="empty">还没有台账数据，先去「凭证入库」建账</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 报销单 ================= -->
+    <div class="page" id="page-report">
+      <div class="page-header">
+        <div>
+          <div class="page-title">出报销单 / 合并发票</div>
+          <div class="page-sub">在「凭证台账」里勾选凭证后过来填参数，一键生成可打印的<b>费用报销单 / 差旅费报销单 / 出差报销明细（模板二）</b>，PDF 与 Excel 两种格式随便挑</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">本次选中的发票</div>
+          <div class="card-hint" id="rep-hint">未选中</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th class="td-idx">#</th><th style="width:88px">凭证类型</th>
+              <th style="width:96px">开票日期</th>
+              <th style="width:186px">发票号码</th><th style="width:92px">费用类别</th>
+              <th>行程 / 项目 / 事由</th><th style="width:104px" class="td-r">金额（元）</th>
+            </tr></thead>
+            <tbody id="rep-body"><tr><td colspan="7" class="empty">还没有选发票</td></tr></tbody>
+          </table>
+        </div>
+        <div class="rep-total" id="rep-total"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">单据参数</div>
+          <div class="card-hint">报销单含费用明细 + 按类别金额汇总 + 合计大写 + 附件清单 + 签字栏</div>
+        </div>
+        <div class="opt-row">
+          <span class="opt-label">单据类型</span>
+          <div class="pill-group" id="kind-pills">
+            <button class="pill active" data-kind="费用报销单">费用报销单</button>
+            <button class="pill" data-kind="差旅费报销单">差旅费报销单</button>
+            <button class="pill" data-kind="模板二"
+                    title="出差报销明细版式：明细六列（出行人/类型/日期/行程/金额/备注）+ 小计 + 按人的出差补助 + 合计">模板二</button>
+          </div>
+        </div>
+        <div class="opt-row">
+          <span class="opt-label">输出格式</span>
+          <div class="pill-group" id="fmt-pills">
+            <button class="pill active" data-fmt="pdf">PDF（打印用）</button>
+            <button class="pill" data-fmt="xlsx">Excel（可再编辑）</button>
+            <button class="pill" data-fmt="both">两种都出</button>
+          </div>
+        </div>
+        <div class="filter-row" style="margin-top:14px">
+          <label class="fi-label">报销人<input class="fi" id="r-person" type="text" style="width:130px"></label>
+          <label class="fi-label">部门<input class="fi" id="r-dept" type="text" style="width:130px"></label>
+          <label class="fi-label">报销日期<input class="fi" id="r-date" type="text" style="width:140px" placeholder="2026年09月15日"></label>
+          <label class="fi-label">事由<input class="fi" id="r-reason" type="text" style="width:260px" placeholder="如：项目现场审计差旅费"></label>
+        </div>
+        <div class="filter-row" id="trip-row" style="display:none">
+          <label class="fi-label">出差起<input class="fi" id="r-start" type="text" style="width:130px" placeholder="2026-09-01"></label>
+          <label class="fi-label">出差止<input class="fi" id="r-end" type="text" style="width:130px" placeholder="2026-09-03"></label>
+          <label class="fi-label">出差地点<input class="fi" id="r-place" type="text" style="width:160px"></label>
+        </div>
+
+        <!-- 差旅费补助：出差才有，几个人 × 几天 × 多少钱，全部自己填 -->
+        <div class="alw-block">
+          <label class="alw-head">
+            <input type="checkbox" id="r-alw-on">
+            <span class="alw-title">计入差旅费补助</span>
+            <span class="alw-hint">出差补助（伙食 / 市内交通 / 杂费等），按「人数 × 天数 × 标准」算，数额自己填</span>
+          </label>
+          <div class="alw-box" id="alw-box" hidden>
+            <table class="alw-table">
+              <thead><tr>
+                <th>补助项目</th>
+                <th style="width:62px">人数</th>
+                <th style="width:62px">天数</th>
+                <th style="width:120px">标准（元/人·天）</th>
+                <th style="width:112px">金额（元）</th>
+                <th style="width:34px"></th>
+              </tr></thead>
+              <tbody id="alw-body"></tbody>
+            </table>
+            <div class="alw-foot">
+              <button class="btn btn-sm" id="btn-alw-add" type="button">+ 加一行</button>
+              <span class="alw-sum">差旅费补助合计：<b id="alw-sum">¥0.00</b></span>
+              <span class="alw-grand" id="alw-grand"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 模板二版式专用：出差补助按人填（票据合计程序算，补助金额自己填） -->
+        <div class="alw-block" id="jy-block" hidden>
+          <div class="alw-head" style="cursor:default">
+            <span class="alw-title">出差补助（按人）</span>
+            <span class="alw-hint">模板二的版式是「每人一行」：<b>票据合计</b>按出行人自动算，
+              <b>补助金额</b>自己填，<b>实际</b>＝票据合计＋补助。全填 0 就等于不出这块</span>
+          </div>
+          <div class="alw-box" id="jy-box" hidden>
+            <table class="alw-table">
+              <thead><tr>
+                <th>姓名（出行人）</th>
+                <th style="width:124px">票据合计（自动）</th>
+                <th style="width:132px">补助金额（自己填）</th>
+                <th style="width:124px">实际</th>
+              </tr></thead>
+              <tbody id="jy-body"></tbody>
+            </table>
+            <div class="alw-foot">
+              <span class="alw-sum">补助合计：<b id="jy-sum">¥0.00</b></span>
+              <span class="alw-grand" id="jy-grand"></span>
+              <span class="jy-fill">
+                <span class="alw-hint" style="margin:0 6px 0 auto">一键按天数算：</span>
+                <input class="fi" id="jy-days" type="number" min="0" step="1" style="width:64px" placeholder="天数">
+                <span class="alw-hint" style="margin:0 4px">天 ×</span>
+                <input class="fi" id="jy-rate" type="number" min="0" step="10" style="width:84px" placeholder="元/人·天">
+                <button class="btn btn-sm" id="btn-jy-fill" type="button" style="margin-left:6px">预填到每人</button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="filter-row" style="margin-top:12px">
+          <label class="fi-label" style="flex:1">备注（打印在单据页脚）
+            <input class="fi" id="r-note" type="text" style="width:100%" placeholder="可留空">
+          </label>
+        </div>
+        <div class="row-actions" style="margin-top:18px">
+          <button class="btn btn-primary btn-lg" id="btn-make-report">生成报销单</button>
+          <button class="btn btn-lg" id="btn-merge-2up">合并发票（A4 上下两张）</button>
+          <button class="btn btn-lg" id="btn-merge-plain">合并发票（每页一张）</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">生成的文件</div>
+          <div class="card-hint" id="out-hint">「打开」直接看，「删除」送进回收站（还能还原）</div>
+        </div>
+        <div class="row-actions" style="margin-bottom:12px">
+          <button class="btn btn-sm" id="btn-out-refresh">刷新列表</button>
+          <button class="btn btn-sm" id="btn-out-folder">打开输出目录</button>
+          <button class="btn btn-sm btn-danger" id="btn-out-clear">全部删除</button>
+        </div>
+        <div class="out-list" id="out-list"><div class="empty" style="padding:14px 4px">还没有生成文件</div></div>
+      </div>
+    </div>
+
+    <!-- ================= 统计汇总 ================= -->
+    <div class="page" id="page-stats">
+      <div class="page-header">
+        <div>
+          <div class="page-title">统计汇总</div>
+          <div class="page-sub">按月度 / 费用类别 / 销方 / 项目看金额分布；导出的 Excel 里还多一张「总览」</div>
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-sm btn-primary" id="btn-export2">导出统计 Excel</button>
+        </div>
+      </div>
+      <div class="stat-row" id="st-stats"></div>
+      <div class="stat-grid" id="st-tables"></div>
+    </div>
+
+    <!-- ================= 运行记录 ================= -->
+    <div class="page" id="page-log">
+      <div class="page-header">
+        <div>
+          <div class="page-title">运行记录</div>
+          <div class="page-sub">本次运行的实时日志；启动日志在项目目录的 launch.log</div>
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-sm" id="btn-open-app">打开程序目录</button>
+          <button class="btn btn-sm" id="btn-clear-log">清空显示</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">日志输出</div><div class="card-hint" id="log-hint">实时</div></div>
+        <div class="log-body" id="log-full" style="height:392px;border-radius:var(--r);border:1px solid var(--border)"></div>
+      </div>
+    </div>
+
+    <!-- ================= 设置 ================= -->
+    <div class="page" id="page-set">
+      <div class="page-header">
+        <div>
+          <div class="page-title">设置</div>
+          <div class="page-sub">路径集中在 app_paths.py；界面主题在左下角「主题外观」里选</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><div class="card-title">默认值</div><div class="card-hint">保存在 config.json</div></div>
+        <div class="filter-row">
+          <label class="fi-label">默认报销人<input class="fi" id="cfg-person" type="text" style="width:140px"></label>
+          <label class="fi-label">默认部门<input class="fi" id="cfg-dept" type="text" style="width:140px"></label>
+        </div>
+        <div class="filter-row" style="margin-top:12px">
+          <label class="fi-label" style="flex:1">费用类别（用逗号分隔）
+            <input class="fi" id="cfg-cats" type="text" style="width:100%">
+          </label>
+        </div>
+        <div class="row-actions" style="margin-top:16px">
+          <button class="btn btn-primary" id="btn-save-cfg">保存设置</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">出行人手机号对照</div>
+          <div class="card-hint">打车行程单票面上只有手机号、没有姓名，靠这张表翻成人名</div>
+        </div>
+        <div class="card-hint" style="display:block;margin-bottom:10px;line-height:1.7">
+          每行一条，写成 <b>手机号 姓名</b>（空格或等号隔开都行）。行程单的「行程人手机号」
+          对上这张表，出行人就自动填上；程序在入库时也会从「同一文件夹里票面确认过的姓名」自动学，
+          学到的会出现在下面，你可以随时改。认不出来的那种，选中台账里的行点「设置出行人」手填。
+        </div>
+        <textarea class="fi" id="phone-map" rows="6" spellcheck="false"
+                  style="width:100%;font-family:Consolas,monospace;font-size:13px;resize:vertical"></textarea>
+        <div class="row-actions" style="margin-top:12px">
+          <button class="btn btn-primary" id="btn-save-pmap">保存对照表</button>
+          <button class="btn" id="btn-reload-pmap">重新载入</button>
+        </div>
+      </div>
+      <div class="card" id="card-users" style="display:none">
+        <div class="card-head">
+          <div class="card-title">账号与权限</div>
+          <div class="card-hint">每人一个账号 —— 谁改了什么在审计里查得到；只有管理员能进这一块</div>
+        </div>
+        <div id="user-list"></div>
+        <div class="filter-row" style="margin-top:14px">
+          <label class="fi-label">用户名<input class="fi" id="nu-name" type="text" style="width:120px" placeholder="登录名"></label>
+          <label class="fi-label">姓名<input class="fi" id="nu-display" type="text" style="width:110px" placeholder="选填"></label>
+          <label class="fi-label">初始密码<input class="fi" id="nu-pw" type="text" style="width:130px" placeholder="至少 6 位"></label>
+          <label class="fi-label">角色<select class="fi" id="nu-role" style="width:132px"></select></label>
+          <button class="btn btn-primary" id="btn-add-user">新增账号</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">台账数据库</div>
+          <div class="card-hint">台账的真身是数据库；发票台账.xlsx 现在只是导出的快照</div>
+        </div>
+        <div id="db-info"></div>
+        <div class="row-actions" style="margin-top:14px">
+          <button class="btn" id="btn-db-refresh">刷新</button>
+          <button class="btn" id="btn-import-excel">从 Excel 导入…</button>
+          <button class="btn" id="btn-audit">审计日志</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">目录信息</div><div class="card-hint">只读</div></div>
+        <div id="path-info"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="theme-pop" id="theme-pop">
+  <div class="theme-pop-head">
+    <span>主题外观</span>
+    <span class="card-hint">12 套 · 点选即生效</span>
+  </div>
+  <div class="theme-grid" id="theme-grid"></div>
+</div>
+
+<div class="log-panel" id="log-panel">
+  <div class="log-head" id="log-head">
+    <div class="log-head-left">运行日志 <span class="log-count" id="log-count">0 条</span></div>
+    <div class="log-head-right"><span class="card-hint" id="log-toggle-hint">点击展开</span></div>
+  </div>
+  <div class="log-body" id="log-body"></div>
+</div>
+
+<datalist id="tv-people"></datalist>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="modal-title" id="modal-title">确认</div>
+    <div class="modal-text" id="modal-text"></div>
+    <div class="modal-note" id="modal-note"></div>
+    <div class="modal-actions">
+      <button class="btn" id="modal-cancel">取消</button>
+      <button class="btn btn-primary" id="modal-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script src="bridge.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
