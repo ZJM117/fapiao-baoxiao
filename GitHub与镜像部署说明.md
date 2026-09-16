@@ -55,37 +55,33 @@ git push   ───────►   仓库（私有/公开）
 
 ### 2. 在本机项目目录里执行
 
-打开 **cmd**（不是这里），逐条粘。
+> 📌 **本地仓库已经全部准备好了** —— `git init`、`git add`、分支 `main`、`git commit` 都做完了
+> （提交号 `c66b4c2`）。也确认过 **54 个跟踪文件里没有任何数据文件**（台账、备份、缓存、
+> 手机号对照表都没有），源码和文档里的真实人名 / 客户名也换成占位符了。
+> **所以你只剩两步：建远程仓库、push。**
 
-> 📌 本地仓库**已经帮你准备好了** —— `git init`、`git add`、分支名 `main` 都做过了，
-> 也确认过 **53 个待提交文件里没有任何数据文件**（台账、备份、缓存、手机号对照表都没有）。
-> 所以从 `commit` 开始就行。
+**第一步：在 GitHub 网页建一个空仓库** → <https://github.com/new>
+
+- **Repository name** 填 `fapiao-baoxiao`
+- 选 **Private**（私有）
+- ⚠️ **别勾** "Add a README file" / "Add .gitignore" / "Choose a license"
+  —— 勾了 GitHub 会先替你提交一次，push 时会冲突
+
+**第二步：打开 cmd，在这个目录里执行两条**
 
 ```bat
 cd /d E:\桌\个人文件同步\workbuddy\发票报销
-
-:: 第一次用 git 的话，先填一下提交身份（只需做一次）
-git config --global user.name "你的名字"
-git config --global user.email "你的邮箱"
-
-:: 最后扫一眼要提交什么（不该出现的见下面「提交前必看」）
-git status
-
-git commit -m "发票报销工具：多人内部使用版"
 
 git remote add origin https://github.com/ZJM117/fapiao-baoxiao.git
 git push -u origin main
 ```
 
-（换个电脑要重做时：先 `git init`、`git branch -M main`、`git add .`，再往下走。）
-
-- 第一次 `commit` 如果提示要填身份，就执行一次：
-  ```bat
-  git config --global user.name "你的名字"
-  git config --global user.email "你的邮箱"
-  ```
+- 提交身份（`ZJM117` / `1170062467@qq.com`）**已经配在这个仓库里**了，不用再配全局的。
 - `push` 时会弹出一个窗口让你登录 GitHub（Git for Windows 自带的凭据管理器），
   选 **Sign in with your browser** 最简单。**不要**去输账号密码 —— GitHub 早就不收密码了。
+
+（以后换台电脑要重做时：`git init` → `git branch -M main` → `git add .` → `git commit`
+→ `git remote add` → `git push`。）
 
 ### 提交前必看（`git status` 里不该出现的东西）
 
