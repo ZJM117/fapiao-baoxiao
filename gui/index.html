@@ -72,6 +72,18 @@
     </nav>
 
     <div class="sb-foot">
+      <div class="sb-user" id="sb-user" hidden>
+        <div class="sb-user-who">
+          <span class="sb-user-name" id="sb-user-name">—</span>
+          <span class="sb-user-role" id="sb-user-role">—</span>
+        </div>
+        <button id="btn-logout" title="退出登录（回到登录页）">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;stroke:currentColor">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          <span class="sb-text-wrap">退出登录</span>
+        </button>
+      </div>
       <button id="btn-theme" title="选择界面主题（12 套）">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;stroke:currentColor">
           <circle cx="13.5" cy="6.5" r="1.4"/><circle cx="17.5" cy="10.5" r="1.4"/><circle cx="8.5" cy="7.5" r="1.4"/><circle cx="6.5" cy="12.5" r="1.4"/>
@@ -122,6 +134,9 @@
           <button class="btn" id="btn-pick">选择文件夹…</button>
           <button class="btn btn-ghost" id="btn-src-reset" title="恢复默认路径">恢复默认</button>
         </div>
+        <!-- 服务器模式：这里是「你选了哪台电脑上的哪个文件夹 → 它落到 NAS 哪儿」，
+             一行看完，不用自己去比对路径 -->
+        <div class="src-origin" id="src-origin" hidden></div>
         <div class="src-note" id="src-note"></div>
 
         <!-- 服务器模式（NAS）专用：容器看不见你这台电脑的磁盘，
@@ -471,6 +486,46 @@
           <div class="page-sub">路径集中在 app_paths.py；界面主题在左下角「主题外观」里选</div>
         </div>
       </div>
+      <!-- 多人就看这块。原来排在第 3 张卡，用户根本没找到，所以要放在最前面 -->
+      <div class="card card-accent" id="card-users" style="display:none">
+        <div class="card-head">
+          <div class="card-title">账号与权限</div>
+          <div class="card-hint">每人一个账号 —— 谁改了什么，在「审计日志」里查得到；只有管理员能进这一块</div>
+        </div>
+        <div id="user-list"></div>
+        <div class="filter-row" style="margin-top:14px">
+          <label class="fi-label">用户名<input class="fi" id="nu-name" type="text" style="width:118px" placeholder="登录名"></label>
+          <label class="fi-label">姓名<input class="fi" id="nu-display" type="text" style="width:100px" placeholder="选填"></label>
+          <label class="fi-label">部门<input class="fi" id="nu-dept" type="text" style="width:100px" placeholder="选填"></label>
+          <label class="fi-label">初始密码<input class="fi" id="nu-pw" type="text" style="width:120px" placeholder="至少 6 位"></label>
+          <label class="fi-label">角色<select class="fi" id="nu-role" style="width:130px"></select></label>
+          <button class="btn btn-primary" id="btn-add-user">新增账号</button>
+        </div>
+        <details class="role-help">
+          <summary>这四种角色的权限差别是什么？（点开看）</summary>
+          <table class="role-tbl">
+            <thead><tr><th>角色</th><th>能做什么</th><th>不能做什么</th></tr></thead>
+            <tbody>
+              <tr><td><b>管理员</b></td>
+                  <td>全部：入库建账、台账增删改、重新识别、生成报销单/合并/统计、账号管理、审计日志、清空台账、改设置</td>
+                  <td>—</td></tr>
+              <tr><td><b>财务审核员</b></td>
+                  <td>看和改台账、重新识别、出行人核对、手机号对照表、生成报销单/合并/统计导出、<b>看审计日志</b>、删除已生成的单据</td>
+                  <td>不能入库建账、不能删台账行、不能改设置、不能管账号</td></tr>
+              <tr><td><b>业务人员</b></td>
+                  <td><b>入库建账（含上传本机文件夹）</b>、看和改台账、出行人核对、手机号对照表、生成报销单/合并/统计导出</td>
+                  <td>不能重新识别、不能删已生成的单据、看不了审计日志、不能改设置、不能管账号</td></tr>
+              <tr><td><b>只读用户</b></td>
+                  <td>只看台账和已生成的单据</td>
+                  <td>任何修改都不行</td></tr>
+            </tbody>
+          </table>
+          <div class="card-hint" style="display:block;margin-top:8px">
+            界面上藏起来的按钮只是「不显眼」；真正的卡口在服务端，每个接口都会按角色再查一次权限。
+          </div>
+        </details>
+      </div>
+
       <div class="card">
         <div class="card-head"><div class="card-title">默认值</div><div class="card-hint">保存在 config.json</div></div>
         <div class="filter-row">
@@ -503,21 +558,6 @@
           <button class="btn" id="btn-reload-pmap">重新载入</button>
         </div>
       </div>
-      <div class="card" id="card-users" style="display:none">
-        <div class="card-head">
-          <div class="card-title">账号与权限</div>
-          <div class="card-hint">每人一个账号 —— 谁改了什么在审计里查得到；只有管理员能进这一块</div>
-        </div>
-        <div id="user-list"></div>
-        <div class="filter-row" style="margin-top:14px">
-          <label class="fi-label">用户名<input class="fi" id="nu-name" type="text" style="width:120px" placeholder="登录名"></label>
-          <label class="fi-label">姓名<input class="fi" id="nu-display" type="text" style="width:110px" placeholder="选填"></label>
-          <label class="fi-label">初始密码<input class="fi" id="nu-pw" type="text" style="width:130px" placeholder="至少 6 位"></label>
-          <label class="fi-label">角色<select class="fi" id="nu-role" style="width:132px"></select></label>
-          <button class="btn btn-primary" id="btn-add-user">新增账号</button>
-        </div>
-      </div>
-
       <div class="card">
         <div class="card-head">
           <div class="card-title">台账数据库</div>

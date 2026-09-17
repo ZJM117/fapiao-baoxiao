@@ -1447,6 +1447,9 @@ class Api:
         """
         me, r = db.actor(), db.role() or "admin"
         return {"user": me, "role": r, "role_cn": db.ROLES.get(r, r),
+                # auth=False 表示本机模式（没设访问口令，压根没有「登录」这回事）——
+                # 界面靠它决定要不要显示「当前登录 / 退出登录」
+                "auth": _auth_on(),
                 "can": {k: db.can(me, r, k) for k in
                         ("clear_ledger", "delete_rows", "set_config", "import_from_excel",
                          "make_report", "start_import", "list_users", "get_ledger")}}

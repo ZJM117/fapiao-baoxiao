@@ -127,6 +127,8 @@ const state = {
   aggregates: null,
   aggScope: '全部',
   cfg: null,
+  serverMode: false,             // 后端是不是服务器模式（NAS）—— 决定「选择文件夹」弹本机还是填路径
+  uploadRoot: '',                // 服务器模式：上传落点的根目录
 };
 
 /* =====================================================================
@@ -356,10 +358,14 @@ function initImportPage() {
   $('src-path').addEventListener('input', () => {
     state.src = $('src-path').value.trim();
     localStorage.setItem(LS.lastSrc, state.src);
+    hideSrcOrigin();          // 手动改了路径，那条「本机文件夹 → NAS」的来源就不再成立了
     checkSource();
   });
 
   $('btn-pick').addEventListener('click', async () => {
+    // 服务器模式（NAS）：直接弹「本机文件夹」选择框，选完立刻上传 ——
+    // 不再让人「先去上面传一遍、再回来把路径改成 NAS 的」（见 initUpload）。
+    if (state.serverMode) { $('up-input').click(); return; }
     const note = $('src-note');
     note.className = 'src-note';
     note.textContent = '正在等待你选择文件夹…';
@@ -382,6 +388,7 @@ function initImportPage() {
     state.src = state.defaultSrc;
     $('src-path').value = state.src;
     localStorage.setItem(LS.lastSrc, state.src);
+    hideSrcOrigin();
     call('set_config', { source: state.src });
     checkSource();
   });
@@ -422,26 +429,58 @@ async function initUpload() {
   const row = $('up-row');
   if (!row) return;
   const info = await call('upload_info');
-  // 本机模式不摆这个按钮：能直接指路径，再给一套「传上去」的做法（还多一份副本）
+  // 本机模式不摆这套：能直接指路径，再给一套「传上去」的做法（还多一份副本）
   // 只会让人犯嘀咕。界面看见的必须等于程序在做的，所以不该出现的一律藏掉。
   if (!info || !info.server) { row.hidden = true; return; }
   row.hidden = false;
+  state.serverMode = true;
   state.uploadRoot = info.root || '';
+
+  // 主入口就是「选择文件夹…」那颗：服务器模式下它弹的是**你这台电脑**的文件夹，
+  // 选完自动上传，不用再自己把路径改成 NAS 的。
+  const pick = $('btn-pick');
+  if (pick) {
+    pick.textContent = '选择本机文件夹…';
+    pick.title = '挑一个你这台电脑上的文件夹，选完自动传到 NAS（子目录原样保留）';
+  }
+  // 上面那行「上传本机文件夹…」按钮就多余了，撤掉；拖拽入口和提示留着。
+  const upBtn = $('btn-upload');
+  if (upBtn) upBtn.style.display = 'none';
+
   const hint = $('up-hint');
   if (!info.ok) {
     hint.textContent = `⚠️ 传不进去：${info.msg || '目录不可写'}`;
   } else {
-    hint.innerHTML = `传到 NAS 上的 <span class="mono">${esc(info.root)}</span>`
+    hint.innerHTML = `也可以直接把文件夹拖到这里　传到 NAS 上的 <span class="mono">${esc(info.root)}</span>`
       + `　单文件上限 ${esc(info.max_text || '')}`;
   }
 
-  $('btn-upload').addEventListener('click', () => $('up-input').click());
   $('up-input').addEventListener('change', () => {
     const files = Array.from($('up-input').files || []);
     $('up-input').value = '';        // 清掉，同一个文件夹还能再选一次
     if (files.length) startUpload(files, baseOf(files[0]));
   });
   initDropUpload();
+}
+
+/* 来源条：本机选的是哪个文件夹 → 它落到 NAS 哪儿（一行看完，不用自己比对路径）
+ * ⚠️ 浏览器不会把本机绝对路径交给网页（webkitdirectory 只给「文件夹名/子路径」），
+ *    所以这里只能显示文件夹名 —— 但"我选的是哪个"一眼就认得出来。 */
+function showSrcOrigin(localFolder, nasPath) {
+  const el = $('src-origin');
+  if (!el) return;
+  if (!localFolder || !nasPath) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML = `<span class="so-k">本机文件夹</span>`
+    + `<b class="so-v">${esc(localFolder)}</b>`
+    + `<span class="so-arrow">→</span>`
+    + `<span class="so-k">NAS</span><code class="so-path">${esc(nasPath)}</code>`
+    + `<span class="so-tip">已传好，直接点「开始入库」</span>`;
+}
+
+function hideSrcOrigin() {
+  const el = $('src-origin');
+  if (el) el.hidden = true;
 }
 
 /** 挑一个能代表这批文件的文件夹名（用来提示「正在传哪个文件夹」） */
@@ -588,6 +627,7 @@ async function startUpload(files, label) {
     localStorage.setItem('invoice-rp.recursive', '1');
     call('set_config', { source: root, recursive: true });
     checkSource();
+    showSrcOrigin(label, root);
     $('in-hint').textContent = `已上传 ${added} 个文件到 NAS，可以点「开始入库」建账了`;
   }
 }
@@ -2405,11 +2445,37 @@ async function doQuit() {
  * 界面藏起按钮只是「不显眼」，真正的卡口在后端（每个接口都会再查一次权限）。
  * 这里拿到 whoami 的 can 表来决定显示哪些入口。
  * ===================================================================== */
-let meInfo = { user: '', role: '', role_cn: '', can: {} };
+let meInfo = { user: '', role: '', role_cn: '', can: {}, auth: false };
 
-async function loadSettingsExtras() {
+/* ---------------------------------------------------------------------
+ * 侧栏底部：当前登录是谁 + 退出登录
+ * ---------------------------------------------------------------------
+ * 后端 /logout 早就在了（会真的把服务端会话删掉，不只是让浏览器丢 Cookie），
+ * 只是界面上一直没挂出来 —— 结果「多人」在界面上完全看不见。这里补上。
+ * 本机模式（没设访问口令）没有登录这回事，整块藏掉，不摆假身份。
+ * ------------------------------------------------------------------- */
+function initMe() {
+  const btn = $('btn-logout');
+  if (btn) {
+    btn.addEventListener('click', () => { window.location.href = '/logout'; });
+  }
+  renderMe();
+}
+
+async function renderMe() {
+  const box = $('sb-user');
+  if (!box) return;
   const r = await call('whoami');
   if (r && !r.error) meInfo = r;
+  if (!meInfo.auth) { box.hidden = true; return; }
+  box.hidden = false;
+  $('sb-user-name').textContent = meInfo.user || '未登录';
+  $('sb-user-role').textContent = meInfo.role_cn || meInfo.role || '';
+  box.title = `当前登录：${meInfo.user || ''}（${meInfo.role_cn || ''}）`;
+}
+
+async function loadSettingsExtras() {
+  await renderMe();
   initSettingsEvents();
   await renderDbInfo();
   await renderUsers();
@@ -2468,6 +2534,14 @@ async function renderUsers() {
 async function onUserOp(ev) {
   const el = ev.target.closest('[data-u]');
   if (!el) return;
+  // ⚠️ 下拉框只认 change：点开下拉框本身也会冒泡一个 click 上来，
+  //    要是把那个 click 当成「改角色」，就会拿旧值去写库、紧接着 renderUsers() 把
+  //    整个列表 innerHTML 换掉 —— 表现就是下拉框一闪就没了、根本选不中（用户报的"一直弹跳"）。
+  if (el.tagName === 'SELECT') {
+    if (ev.type !== 'change') return;
+  } else if (ev.type !== 'click') {
+    return;
+  }
   const u = el.dataset.u;
   const act = el.dataset.act;
   let r = null;
@@ -2503,11 +2577,13 @@ async function onUserOp(ev) {
 async function addUser() {
   const name = $('nu-name').value.trim();
   const disp = $('nu-display').value.trim();
+  const dept = $('nu-dept') ? $('nu-dept').value.trim() : '';
   const pw = $('nu-pw').value;
   if (!name || !pw) return toast('用户名和初始密码都要填', 'warn');
-  const r = await call('create_user', name, pw, $('nu-role').value, disp, '');
+  const r = await call('create_user', name, pw, $('nu-role').value, disp, dept);
   if (r && r.error) return toast(r.error, 'err');
   $('nu-name').value = ''; $('nu-display').value = ''; $('nu-pw').value = '';
+  if ($('nu-dept')) $('nu-dept').value = '';
   toast(`已新增账号 ${name}`, 'ok');
   renderUsers();
 }
@@ -2595,6 +2671,7 @@ function boot() {
   initSetPage();
   initLogPanel();
   initWindow();
+  initMe();
   syncKindPills();
   syncFmtPills();
   syncScopePills();
