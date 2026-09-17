@@ -30,6 +30,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from collections import deque
 from datetime import datetime
@@ -57,6 +58,20 @@ API_METHODS = {"poll", "whoami", "get_paths", "get_config", "set_config", "pick_
                "open_folder", "open_file", "reveal", "shutdown",
                "job_retry", "job_cancel"}
 
+
+def _allowed_methods(role: str) -> list:
+    """某个角色**能调的接口全集** —— 界面靠它灰掉自己点不了的按钮。
+
+    为什么整表下发而不是逐个问 can['xxx']：接口一多，前端漏写一个就变成
+    「按钮亮着、点了报错」（用户遇到的就是这个）。而 db.ROLE_ALLOW 本来就是
+    后端卡口用的那份白名单 —— role 传进来，允许集只有一份，不会两边对不上。
+    admin 在白名单里是 None（= 全允许），这里展开成全部接口；未知角色给空表。
+    """
+    allow = db.ROLE_ALLOW.get(role or "", set())
+    if allow is None:
+        return sorted(API_METHODS)
+    return sorted(allow)
+
 # 耗时写操作：解析原件、写台账、打印 PDF —— 全都不能两个人同时跑。
 # 以前只有「入库」有 busy 挡着，别的接口能被同时点：一个人在清空台账、另一个人在入库，
 # 两边都不报错，结果谁也说不清。这里把它们统一收进「重活锁」。
@@ -79,23 +94,94 @@ JOB_KINDS = {
     "clear_ledger": "清空台账",
 }
 
+# ======================================================================
+# 日志
+# ----------------------------------------------------------------------
+# 一条日志要有三个去处，少一个排障就断链：
+#   ① launch.log 文件       —— 事后翻，重启也还在
+#   ② stdout               —— 容器里就是 `docker logs`
+#   ③ 内存环形缓冲          —— 界面「运行记录」页实时看（poll 取走）
+#
+# ⚠️ 以前是三个各自为政：_log_line 只写 ①、Api._log 只进 ③+②、而 do_POST 里
+#    接口抛的异常**哪儿都不进**。于是「删除报错」在界面上只显示一句笼统的
+#    失败、docker logs 一片空白 —— 用户反馈的「我这看容器日志啥也没有」就是这个。
+#    现在统一走 _log_line，一个出口写全三处。
+# ======================================================================
+LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARN": 30, "ERROR": 40}
+_LOG_LEVEL = (os.environ.get("FB_LOG_LEVEL") or "INFO").strip().upper()
+if _LOG_LEVEL not in LOG_LEVELS:
+    _LOG_LEVEL = "INFO"
+
+
+def _force_utf8_streams():
+    """把 stdout/stderr 强制成 UTF-8。
+
+    容器里 locale 常常是 C/POSIX，Python 的 stdout 编码就可能是 ASCII ——
+    这时 print 中文直接抛 UnicodeEncodeError。以前的 _safe_print 把它 except 掉了，
+    结果是「日志什么都没打出来」，比报错还难查。启动时先改掉编码，从根上避免。
+    """
+    for nm in ("stdout", "stderr"):
+        s = getattr(sys, nm, None)
+        if s is None:
+            continue
+        try:
+            s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:                                       # noqa: BLE001
+            pass
+
+
+_force_utf8_streams()
+
 _log_lock = threading.Lock()
+_LOGS = deque(maxlen=600)          # 界面「运行记录」读的就是这个
+_LOG_SEQ = 0
 
 
-def _log_line(msg: str):
-    line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    try:
-        with open(LAUNCH_LOG, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
+def _push_log(msg: str, level: str = "INFO") -> int:
+    """进内存环形缓冲，返回这条的序号（界面按序号做增量）"""
+    global _LOG_SEQ
+    with _log_lock:
+        _LOG_SEQ += 1
+        _LOGS.append({"i": _LOG_SEQ, "t": datetime.now().strftime("%H:%M:%S"),
+                      "m": msg, "lv": level})
+        return _LOG_SEQ
 
 
 def _safe_print(msg: str):
     try:
         print(msg, flush=True)
-    except Exception:
+    except UnicodeEncodeError:
+        # reconfigure 没生效（被别的库换回了 ASCII）时的兜底：编码成 UTF-8 再写
+        try:
+            buf = getattr(sys.stdout, "buffer", None)
+            if buf is not None:
+                buf.write((msg + "\n").encode("utf-8", "replace"))
+                buf.flush()
+        except Exception:                                       # noqa: BLE001
+            pass
+    except Exception:                                           # noqa: BLE001
         pass
+
+
+def _log_line(msg: str, level: str = "INFO", ui: bool = None):
+    """统一日志出口：文件 + stdout(docker logs) + 界面「运行记录」。
+
+    ui：要不要也进界面的运行记录。默认「除 DEBUG 外都进」——DEBUG 是逐接口的流水，
+        全塞给界面会把用户真正要看的东西冲掉。
+    """
+    if LOG_LEVELS.get(level, 20) < LOG_LEVELS.get(_LOG_LEVEL, 20):
+        return
+    line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [{level}] {msg}"
+    try:
+        with open(LAUNCH_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:                                           # noqa: BLE001
+        pass
+    if ui is None:
+        ui = level != "DEBUG"
+    if ui:
+        _push_log(msg, level)
+    _safe_print(line)
 
 
 # ======================================================================
@@ -445,8 +531,8 @@ class Api:
         self.busy = False
         self.exit_flag = threading.Event()
         self.last_active = time.time()
-        self._logs = deque(maxlen=600)
-        self._seq = 0
+        # 日志缓冲在模块级（_LOGS/_LOG_SEQ）—— 因为登录、越权这些发生在 UiHandler 里，
+        # 拿不到 Api 实例，但一样要出现在界面的「运行记录」里。
         self._progress = {"on": False, "cur": 0, "total": 0, "label": ""}
         self._status = {"text": "就绪", "kind": "ready"}
         self._result = None            # 最近一次入库结果
@@ -501,11 +587,8 @@ class Api:
         self._result_id += 1
 
     def _log(self, msg: str):
-        with _log_lock:
-            self._seq += 1
-            self._logs.append({"i": self._seq, "t": datetime.now().strftime("%H:%M:%S"),
-                               "m": msg})
-        _safe_print(msg)
+        """操作日志：文件 + stdout(docker logs) + 界面「运行记录」，三处一起写。"""
+        _log_line(msg)
 
     def _set_status(self, text, kind="ready"):
         self._status = {"text": text, "kind": kind}
@@ -696,8 +779,8 @@ class Api:
     def poll(self, since=0):
         """前端每 0.4s 调一次；日志按 since 增量返回，结果带 result_id 供前端去重"""
         self.touch()
-        logs = [x for x in list(self._logs) if x["i"] > int(since or 0)]
-        return {"logs": logs, "seq": self._seq, "progress": self._progress,
+        logs = [x for x in list(_LOGS) if x["i"] > int(since or 0)]
+        return {"logs": logs, "seq": _LOG_SEQ, "progress": self._progress,
                 "status": self._status, "busy": self.busy,
                 "result": self._result, "result_id": self._result_id}
 
@@ -933,18 +1016,36 @@ class Api:
         # 只挪显示顺序，「序号」是行的身份，跟着行走、不重编号。
         att = attachment.analyze(rows)
         rows = att["rows"]
-        money = [float(str(r.get("价税合计") or 0).replace(",", "") or 0) for r in rows]
+        # ⭐ 金额口径必须和生成的单据**一模一样**：打车行程单这类「发票的证明附件」
+        #   金额已经含在它对应的那张发票里，再算一遍就是重复计钱。
+        #   曾致台账页显示 4361.00、生成的单据只有 4284.90 —— 差的正是那张 76.10 的行程单。
+        attach_seqs = att["attach_seqs"]
+        m_bill = [self._amt(r) for r in rows if str(r.get("序号")) not in attach_seqs]
+        m_att = [self._amt(r) for r in rows if str(r.get("序号")) in attach_seqs]
+        pend = [self._amt(r) for r in rows
+                if str(r.get("序号")) not in attach_seqs and r.get("状态") != "已报销"]
+        # ⭐「分开报」：按「报销批次」分组，每组给张数/金额/起止日期/涉及的人，
+        #   界面上点一下就只看这一批 —— 两批票就能各自独立统计、各自出单。
+        #   分组时**忽略当前的批次筛选**，否则筛了某一批就只剩一个分组，反而没得挑。
+        by_batch = self._by_batch(
+            filter_rows(lg.reindex(list(allrows)),
+                        {k: v for k, v in (filt or {}).items() if k != "batch"}),
+            attach_seqs)
         return {
             "rows": rows,
             "total": len(rows),
-            "sum": round(sum(money), 2),
-            "pending_count": sum(1 for r in rows if r.get("状态") != "已报销"),
-            "pending_sum": round(sum(
-                float(str(r.get("价税合计") or 0).replace(",", "") or 0)
-                for r in rows if r.get("状态") != "已报销"), 2),
+            "sum": round(sum(m_bill), 2),                     # 计费合计（附件不重复计）
+            "sum_raw": round(sum(m_bill) + sum(m_att), 2),    # 全部行简单相加（旧口径，留个对照）
+            "attach_sum": round(sum(m_att), 2),               # 被排除掉的附件金额
+            "pending_count": sum(1 for r in rows
+                                 if str(r.get("序号")) not in attach_seqs
+                                 and r.get("状态") != "已报销"),
+            "pending_sum": round(sum(pend), 2),
             "all_count": len(allrows),
+            "by_batch": by_batch,
             # 哪几行是「跟在发票后面的附件」→ 界面标「↳ 附件」并显示它是谁的附件
             "attach_links": att["link_of"],
+            "attach_seqs": sorted(attach_seqs),
             "attach_count": att["n_attach"],
             # 「出行人核对」按钮上的角标：还空着的 + 提示里写着「请核对」的
             "tv_todo": sum(1 for r in allrows
@@ -957,6 +1058,51 @@ class Api:
             "months": self._all_values("开票日期", 7, rows=allrows),
             "aggregates": lg.aggregate(rows),
         }
+
+    @staticmethod
+    def _amt(r) -> float:
+        """一行的价税合计（字符串带千分位/空值都能吃）"""
+        return float(str(r.get("价税合计") or 0).replace(",", "") or 0)
+
+    @staticmethod
+    def _by_batch(rows, attach_seqs=None):
+        """
+        「按批次分开报」：把行按「报销批次」分组。
+        每组给：张数 / 计费金额（附件不重复计）/ 附件张数 / 待报张数 / 已报张数 /
+                开票日期区间 / 涉及的人（出行人，没有就用报销人）。
+        次序：最近开票的批次在前，「没填批次」的排最后。
+        """
+        attach_seqs = {str(s) for s in (attach_seqs or ())}
+        g = {}
+        for r in rows:
+            k = str(r.get("报销批次") or "").strip()
+            d = g.get(k)
+            if d is None:
+                d = g[k] = {"batch": k, "n": 0, "n_attach": 0, "sum": 0.0,
+                            "pending": 0, "done": 0, "first": "", "last": "",
+                            "persons": []}
+            d["n"] += 1
+            if str(r.get("序号")) in attach_seqs:
+                d["n_attach"] += 1
+            else:
+                d["sum"] += Api._amt(r)
+            if r.get("状态") == "已报销":
+                d["done"] += 1
+            else:
+                d["pending"] += 1
+            who = str(r.get("出行人") or r.get("报销人") or "").strip()
+            if who and who not in d["persons"]:
+                d["persons"].append(who)
+            dt = str(r.get("开票日期") or "").strip()[:10]
+            if dt:
+                d["first"] = dt if not d["first"] else min(d["first"], dt)
+                d["last"] = dt if not d["last"] else max(d["last"], dt)
+        # 最近开票的批次在前；没填日期（如手工录入的影印件）用全零占位，倒序后落到最后
+        out = sorted(g.values(),
+                     key=lambda x: (x["last"] or "0000-00-00", x["batch"]), reverse=True)
+        for d in out:
+            d["sum"] = round(d["sum"], 2)
+        return out
 
     def _all_values(self, field, cut=0, rows=None):
         import ledger as lg
@@ -1138,32 +1284,93 @@ class Api:
                 names.add(v)
         return {"rows": out, "stat": stat, "people": sorted(names)}
 
-    def save_traveler_review(self, items, remember=True):
+    def _face_names(self, seqs, by_seq):
+        """
+        查这几行「票面上白纸黑字写着的出行人」是谁 → {序号: 姓名}；票面没写的进不了这张表。
+
+        为什么要它：批量「设置出行人」是勾一片、填一个名字，很容易把**票面本来读对**的
+        姓名一起盖掉（邵自杰/陆兰玲 的高铁票曾被全写成 孙振强）。改之前先来这儿问一句。
+        借解析缓存（命中就不读原件），缓存没有的当场解析；最多解析 200 张，免得界面干等。
+        """
+        import invparse as ip
+        import traveler as tv
+        out = {}
+        try:
+            cache = ip.load_cache()
+        except Exception:
+            cache = {}
+        pm = tv.load_map()
+        budget = 200
+        for seq in seqs:
+            r = by_seq.get(seq)
+            if r is None:
+                continue
+            p = str(r.get("文件路径") or "").strip()
+            if not p:
+                continue
+            rec = None
+            try:
+                rec = cache.get(ip._ckey(Path(p)))
+            except Exception:
+                rec = None
+            if rec is None and budget > 0:
+                fp = Path(p)
+                if fp.exists():
+                    budget -= 1
+                    try:
+                        rec = ip.parse_file(fp)
+                    except Exception:
+                        rec = None
+            rec = dict(rec or {})
+            rec.setdefault("src", p)
+            name, src = tv.resolve(rec, phone_map=pm)
+            if src == tv.SRC_FACE and name:
+                out[seq] = name
+        return out
+
+    def save_traveler_review(self, items, remember=True, protect=True):
         """
         落下核对结果。items = [{"seq": 序号, "name": 出行人, "phone": 票面手机号}]
           · 写台账「出行人」（名字留空 = 清掉这格）；
           · 顺手把「提示」里那几句「请核对」摘掉，别的提示（重复、红字）留着；
           · remember=True 就把「手机号 → 姓名」记进对照表，下次同一部手机开的行程单自动认人；
           · 记一笔「这几张人工核过了」——名字以后再被改掉，核对标记自动失效。
+
+        ⭐ protect=True（默认）：**票面上白纸黑字写着姓名的行，不许被别的名字盖掉**。
+           批量「设置出行人」就是杀器 —— 勾一片、填一个名字，邵自杰/陆兰玲的票也写成了
+           孙振强。这类行进 protected 名单、原样不动，让界面问一句「这几张也要覆盖吗」。
+           用户在「出行人核对」面板里**逐行看着「来源」那一列**改的，传 protect=False。
         """
         import re as _re
         import ledger as lg
         import traveler as tv
         items = [x for x in (items or []) if isinstance(x, dict)]
         if not items:
-            return {"updated": 0, "remembered": 0, "cleared": 0}
+            return {"updated": 0, "remembered": 0, "cleared": 0, "protected": []}
         try:
             by_seq = {str(r.get("序号")): r for r in lg.load()}
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}
 
-        mapping, marks, learn = {}, {}, {}
+        face = self._face_names([str(x.get("seq") or "").strip() for x in items], by_seq) \
+            if protect else {}
+
+        mapping, marks, learn, protected = {}, {}, {}, []
         for it in items:
             seq = str(it.get("seq") or "").strip()
             r = by_seq.get(seq)
             if r is None:
                 continue
             name = str(it.get("name") or "").strip()
+            fa = face.get(seq)
+            if fa and name and name != fa:
+                # 票面写着 fa，却要填成 name → 拦住，让界面来确认
+                protected.append({"seq": seq, "face": fa, "new": name,
+                                  "cur": str(r.get("出行人") or "").strip(),
+                                  "no": str(r.get("发票号码") or ""),
+                                  "detail": str(r.get("行程/明细") or ""),
+                                  "file": str(r.get("文件路径") or "")})
+                continue
             f = {"出行人": name}
             new_tip = self._strip_tv_tip(r.get("提示"))
             if new_tip != str(r.get("提示") or ""):
@@ -1189,7 +1396,18 @@ class Api:
         self._log(f"👤 出行人核对完成：确认 {n} 张"
                   + (f"，其中 {cleared} 张留空" if cleared else "")
                   + (f"；记住 {len(learn)} 个手机号" if learn else ""))
-        return {"updated": n, "remembered": len(learn), "cleared": cleared}
+        if protected:
+            self._log(f"🛡️ 拦下 {len(protected)} 张：票面上写着别的人名，没被覆盖 → "
+                      + "；".join(f"序号{d['seq']} 票面「{d['face']}」≠ 要填的「{d['new']}」"
+                                  for d in protected[:8])
+                      + ("…" if len(protected) > 8 else ""))
+        # Excel 只是快照，写不出去（多半是 Excel 开着）不该让用户以为没改成 —— 说清楚
+        stale = lg.excel_stale()
+        if stale:
+            self._log("⚠️ Excel 快照没刷新（文件被占用）：台账库已经改好了，"
+                      "关掉 Excel 后随便再点一次修改就会自动补上")
+        return {"updated": n, "remembered": len(learn), "cleared": cleared,
+                "protected": protected, "excel_stale": stale}
 
     # 重新识别时只覆盖「票面上读来的」字段；人工填的一律不动
     _REFRESH_FIELDS = (("凭证类型", "ctype"), ("票面标记", "stamp"), ("发票号码", "no"),
@@ -1705,7 +1923,9 @@ class Api:
                 "auth": _auth_on(),
                 "can": {k: db.can(me, r, k) for k in
                         ("clear_ledger", "delete_rows", "set_config", "import_from_excel",
-                         "make_report", "start_import", "list_users", "get_ledger")}}
+                         "make_report", "start_import", "list_users", "get_ledger")},
+                # 完整白名单：界面据此灰掉点不了的按钮（见 _allowed_methods）
+                "allowed": _allowed_methods(r)}
 
     def list_users(self):
         try:
@@ -1864,8 +2084,8 @@ button{margin-top:14px;width:100%;padding:10px;border:0;border-radius:8px;backgr
 </style></head><body>
 <form class="card" method="post" action="/login">
   <h1>发票报销工具</h1>
-  <p class="sub">填账号密码；没有账号就只填访问口令（只读）</p>
-  <input type="text" name="username" autocomplete="username" placeholder="用户名（可留空）">
+  <p class="sub">有账号就填账号密码；只填访问口令＝管理员（用户名留空）</p>
+  <input type="text" name="username" autocomplete="username" placeholder="用户名（留空＝用访问口令登录，是管理员）">
   <input type="password" name="password" autofocus autocomplete="current-password" placeholder="密码 / 访问口令">
   <button type="submit">进入</button>
   <div class="err">{err}</div>
@@ -1970,6 +2190,9 @@ a.up{{color:#57606a}}.n{{color:#8c959f;font-size:12px;white-space:nowrap}}
 # ======================================================================
 class UiHandler(http.server.SimpleHTTPRequestHandler):
     api = None
+    # 高频轮询接口不逐条记日志：poll 每 0.4s 一次、list_jobs 1.5s 一次，
+    # 记了会把「运行记录」和 docker logs 刷满，真正要看的东西反而被冲走。
+    QUIET_API = {"poll", "list_jobs"}
 
     def log_message(self, *args):
         pass
@@ -2007,6 +2230,8 @@ class UiHandler(http.server.SimpleHTTPRequestHandler):
     def _deny(self):
         """没登录：页面请求跳登录页，接口请求返 401（前端 bridge 会当成错误抛出）"""
         if self.path.startswith("/api/"):
+            _log_line(f"🚫 未登录就访问接口：{self.path} "
+                      f"@{self.client_address[0] if self.client_address else '?'}", "WARN")
             body = json.dumps({"result": None, "error": "未登录：请先在页面里输入口令"},
                               ensure_ascii=False).encode("utf-8")
             self.send_response(401)
@@ -2208,6 +2433,15 @@ class UiHandler(http.server.SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _json_err(self, msg, level: str = "ERROR"):
+        """接口出错：既回给前端，也记进日志。
+
+        ⚠️ 上传这条路是自己直接写 JSON 的（不走 do_POST 那套统一记录），
+        以前出错只回给前端 —— 前端一吞，界面和 docker logs 就都没有线索了。
+        """
+        _log_line(f"❌ {self.path.split('?')[0]} 失败：{msg}", level)
+        return self._json({"result": None, "error": msg})
+
     def _do_upload(self):
         """收一个文件。body 就是文件原始字节，相对路径放在 X-Upload-Path 头里（base64）。
 
@@ -2225,31 +2459,29 @@ class UiHandler(http.server.SimpleHTTPRequestHandler):
         if not parts:
             # 提前拒绝的这几种都直接把连接关掉：body 还没收，不能留在连接里
             self.close_connection = True
-            return self._json({"result": None, "error": "上传路径不合法（疑似越界）"})
+            return self._json_err("上传路径不合法（疑似越界）", "WARN")
         name = parts[-1]
         if length <= 0:
-            return self._json({"result": None, "error": f"{name}：空文件"})
+            return self._json_err(f"{name}：空文件", "WARN")
         if length > MAX_UPLOAD_BYTES:
             self.close_connection = True
-            return self._json({"result": None,
-                               "error": f"{name}：{_human_size(length)} 超过单文件上限 "
-                                        f"{_human_size(MAX_UPLOAD_BYTES)}"})
+            return self._json_err(f"{name}：{_human_size(length)} 超过单文件上限 "
+                                  f"{_human_size(MAX_UPLOAD_BYTES)}", "WARN")
         try:
             root = upload_root()
         except Exception as e:
             self.close_connection = True
-            return self._json({"result": None,
-                               "error": f"票据目录写不进去：{e}（去「设置」里改一下路径）"})
+            return self._json_err(f"票据目录写不进去：{e}（去「设置」里改一下路径）")
 
         target = _resolve_under(root, "/".join(parts))       # 再确认一次没跑出 root
         if target is None:
             self.close_connection = True
-            return self._json({"result": None, "error": "上传路径越界"})
+            return self._json_err("上传路径越界", "WARN")
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
         except Exception as e:
             self.close_connection = True
-            return self._json({"result": None, "error": f"建不了目录 {target.parent}：{e}"})
+            return self._json_err(f"建不了目录 {target.parent}：{e}")
 
         # 同名同大小 → NAS 上已经有这份了，别再写一遍（重复上传同一个文件夹很常见）
         if target.is_file() and target.stat().st_size == length:
@@ -2278,7 +2510,7 @@ class UiHandler(http.server.SimpleHTTPRequestHandler):
                 tmp.unlink()
             except OSError:
                 pass
-            return self._json({"result": None, "error": f"{final.name} 写入失败：{e}"})
+            return self._json_err(f"{final.name} 写入失败：{e}")
 
         return self._json({"result": {"ok": True, "mode": "new", "name": final.name,
                                       "rel": final.relative_to(root).as_posix(),
@@ -2332,7 +2564,9 @@ class UiHandler(http.server.SimpleHTTPRequestHandler):
                      self.client_address[0] if self.client_address else "",
                      self._role())
         if path == "/api/upload_raw":        # 上传走原始字节，不套 JSON 那层
+            t_up = time.time()
             self._do_upload()
+            self._log_api_call("upload_raw", "", t_up)
             return
         name = path[len("/api/"):]
         length = int(self.headers.get("Content-Length") or 0)
@@ -2342,14 +2576,15 @@ class UiHandler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             args = []
 
-        result, error = None, None
+        result, error, tb, t0 = None, None, "", time.time()
         if name not in API_METHODS:
             error = f"未开放的方法: {name}"
         elif not db.can(self._username(), self._role(), name):
             # 每个写接口都在这里再过一遍权限：界面藏起按钮只是「不显眼」，不是「不能做」
             role_cn = db.ROLES.get(self._role(), self._role())
             error = f"权限不足：当前身份是「{role_cn}」，不能执行这一步"
-            _log_line(f"🚫 越权尝试：{self._username()}（{role_cn}）→ {name}")
+            # 日志不在这里单独写：下面的 _log_api_call 会带接口名/身份/耗时记一行，
+            # 比这里再补一行「越权尝试」更全（审计照旧单独留痕）。
             db.audit("越权尝试", "api", name, ok=False, error=error)
         else:
             fn = getattr(self.api, name, None)
@@ -2362,6 +2597,10 @@ class UiHandler(http.server.SimpleHTTPRequestHandler):
                     result = fn(*args) if callable(fn) else None
             except Exception as e:
                 error = f"{type(e).__name__}: {e}"
+                # 完整堆栈进日志。以前这里只把错误字符串塞进返回值的 error 字段，
+                # 前端又把它吞了 —— 于是「接口报错」在界面和 docker logs 两边都查不到线索。
+                tb = traceback.format_exc()
+        self._log_api_call(name, error, t0, tb)
 
         payload = json.dumps({"result": result, "error": error},
                              ensure_ascii=False).encode("utf-8")
@@ -2371,6 +2610,22 @@ class UiHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(payload)
+
+    def _log_api_call(self, name, error, t0, tb=""):
+        """每次接口调用都留一行：谁、什么角色、耗时、成没成、为什么败。
+
+        这一行是排障的主线索 —— 用户报「点了没反应/报错」时，先看这里：
+        失败原因、当时是什么身份，一眼就能分清「没权限」还是「程序出错」。
+        """
+        ms = (time.time() - t0) * 1000
+        who = self._username() or "(未登录)"
+        role_cn = db.ROLES.get(self._role(), self._role()) or "(无角色)"
+        if error:
+            _log_line(f"❌ {name} 失败（{ms:.0f}ms；{who}/{role_cn}）：{error}", "ERROR")
+            if tb:
+                _log_line(f"   堆栈（{name}）：\n{tb}", "ERROR")
+        elif name not in self.QUIET_API:
+            _log_line(f"· {name} ok（{ms:.0f}ms；{who}/{role_cn}）", "DEBUG")
 
     def end_headers(self):
         if not self.path.startswith("/api/"):
@@ -2447,6 +2702,16 @@ def main():
     _log_line(f"打印 PDF 用的浏览器：{EDGE}")
     if _auth_on():
         _log_line("访问口令：已启用（没登录的访问会被挡去登录页）")
+    # 启动时把「程序在看哪些目录」说清楚 —— 报「删不掉/找不到文件」时，
+    # 第一件事就是核对这里打印的路径跟实际挂载的对不对得上。
+    _log_line(f"日志级别：{_LOG_LEVEL}（要看逐接口流水就设 FB_LOG_LEVEL=DEBUG）"
+              f"　日志文件：{LAUNCH_LOG}")
+    try:
+        _log_line(f"票据文件夹：{load_config().get('source') or '(未设置)'}"
+                  f"　台账库：{db.db_path()}　输出目录：{OUTPUT_DIR}"
+                  f"　回收站：{RECYCLE_DIR}")
+    except Exception as e:                                      # noqa: BLE001
+        _log_line(f"启动自检读路径失败：{type(e).__name__}: {e}", "WARN")
 
     if not SERVER_MODE:
         alive = _alive_url()

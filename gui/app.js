@@ -138,6 +138,8 @@ const state = {
   jyPeople: [],                  // [{name, bills}] 后端 report_persons 给的
   jyTotal: 0,
   attachLinks: {},               // {附件序号: {main_seq, main_amount}} —— 台账里标「↳ 附件」
+  attachSeqs: new Set(),         // 附件行的序号集合：算合计要排除它们，才能跟单据一个数
+  byBatch: [],                   // [{batch,n,sum,first,last,persons}] 「按批次分开报」用
   outputs: [],                   // 生成过的文件（来自后端 输出/生成记录.json）
   filter: { status: '', ctype: '', category: '', batch: '', person: '',
             month: '', min: '', max: '', kw: '' },
@@ -447,6 +449,7 @@ function toast(text, kind) {
 }
 
 let modalOk = null;
+let modalCancel = null;
 function showModal(o) {
   $('modal-title').textContent = o.title || '确认';
   $('modal-text').innerHTML = o.html || '';
@@ -464,13 +467,19 @@ function showModal(o) {
     m.classList.toggle('modal-doc', !!o.doc);
   }
   modalOk = o.onOk || null;
+  modalCancel = o.onCancel || null;
   $('overlay').classList.add('show');
   const box = document.querySelector('#overlay .modal');
   if (box) box.scrollTop = 0;
 }
 function hideModal() {
+  const onCancel = modalCancel;
   $('overlay').classList.remove('show');
   modalOk = null;
+  modalCancel = null;
+  // 「取消/关掉」的回调：有的弹层关了就等于放弃了一次操作，得把界面收拾干净
+  // （点「确定」时 ok 处理器会先把 modalCancel 清掉，所以不会走到这儿）
+  if (onCancel) { try { onCancel(); } catch (e) { /* 关窗失败不该再炸一次 */ } }
 }
 
 /** 调后端接口的薄包装：出错统一转成 toast，不让界面炸掉 */
@@ -478,12 +487,18 @@ async function call(name, ...args) {
   const a = api();
   if (!a) { toast('界面还没初始化好，请稍候…', 'warn'); return null; }
   try {
-    return await a[name](...args);
+    const r = await a[name](...args);
+    call.lastError = '';
+    return r;
   } catch (e) {
+    // 记下最后一次失败原因：有些地方（比如设置页的账号块）要把原因写在页面上，
+    // 光靠 toast 一闪而过看不见。
+    call.lastError = String((e && e.message) || e);
     toast(`${name} 调用失败：${e}`, 'err');
     return null;
   }
 }
+call.lastError = '';
 
 /* =====================================================================
  * 一、凭证入库
@@ -1033,6 +1048,10 @@ function initLedgerPage() {
   ['f-kw', 'f-min', 'f-max'].forEach((id) =>
     $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') loadLedger(); }));
 
+  // 「按批次分开报」那条横条：点批次名 = 只看这批，点「全选这批」= 直接勾上准备出单
+  const bb = $('batch-bar');
+  if (bb) bb.addEventListener('click', onBatchBarClick);
+
   $('btn-export').addEventListener('click', () => doExport(currentFilter()));
   $('btn-open-ledger2').addEventListener('click', openLedgerFile);
 
@@ -1106,7 +1125,8 @@ function refreshSelected() {
     onOk: async () => {
       hideModal();
       const r = await call('refresh_rows', seqs);
-      if (!r || r.error) { toast('重新识别失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
+      if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
+      if (r.error) { toast('重新识别失败：' + r.error, 'err'); return; }
       let msg = `已重新识别 ${r.updated} 条`;
       if (r.miss) msg += `，${r.miss} 条原件在磁盘上找不到`;
       if (r.fail) msg += `，${r.fail} 条读不了`;
@@ -1130,7 +1150,8 @@ function deleteSelected() {
     onOk: async () => {
       hideModal();
       const r = await call('delete_rows', seqs);
-      if (!r || r.error) { toast('删除失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
+      if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
+      if (r.error) { toast('删除失败：' + r.error, 'err'); return; }
       state.sel.clear();
       toast(`已删除 ${r.deleted} 条记录`, 'ok');
       await loadLedger();
@@ -1152,7 +1173,8 @@ function clearLedger() {
     onOk: async () => {
       hideModal();
       const r = await call('clear_ledger');
-      if (!r || r.error) { toast('清空失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
+      if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
+      if (r.error) { toast('清空失败：' + r.error, 'err'); return; }
       state.sel.clear();
       state.selRows = [];
       toast(`台账已清空（删掉 ${r.cleared} 条，备份在「台账备份」）`, 'ok');
@@ -1165,10 +1187,24 @@ function selectedSeqs() {
   return Array.from(state.sel);
 }
 
+/** 这一行是不是「发票的证明附件」（打车行程单）：它的钱已经含在主票里，不能再加一遍 */
+function isAttach(seq) {
+  return state.attachSeqs.has(String(seq));
+}
+
+/**
+ * 台账**库**改好了、但 Excel 快照没跟上（多半是用户正开着 Excel）——
+ * 以前这种情况会整个报错「台账文件正被占用」，看着像白操作了一遍。现在只补一句说明。
+ */
+function staleNote(r) {
+  return (r && r.excel_stale) ? '（Excel 快照没刷新：文件被占用，库里已经改好了）' : '';
+}
+
 function selectedSum() {
   let s = 0;
   state.rows.forEach((r) => {
-    if (state.sel.has(String(r['序号']))) s += num(r['价税合计']);
+    const seq = String(r['序号']);
+    if (state.sel.has(seq) && !isAttach(seq)) s += num(r['价税合计']);
   });
   return s;
 }
@@ -1207,6 +1243,8 @@ async function loadLedger() {
   if (r.error) {
     state.rows = [];
     state.attachLinks = {};
+    state.attachSeqs = new Set();
+    state.byBatch = [];
     $('ledger-body').innerHTML =
       `<tr><td colspan="7" class="empty">读取台账失败：${esc(r.error)}<br>
        （如果 Excel 正开着这个文件，请先关掉）</td></tr>`;
@@ -1218,17 +1256,21 @@ async function loadLedger() {
   state.aggregates = r.aggregates || null;
   // 后端已经把「打车行程单」挪到它对应发票的紧后面，并告诉我们哪几行是附件
   state.attachLinks = r.attach_links || {};
+  state.attachSeqs = new Set((r.attach_seqs || []).map(String));
+  state.byBatch = r.by_batch || [];
+  // 附件行不算钱：它的金额已经含在主票里（跟后端生成单据时用的是同一个口径）
+  const sumRows = (arr) => arr.reduce(
+    (a, x) => a + (isAttach(String(x['序号'])) ? 0 : (num(x['价税合计']) || 0)), 0);
 
   /* 「有风险」视图：票面红字（退票费/改签差价）或重复报销提醒。
      后端没有这个筛选项，所以在**整份命中结果**上过滤（get_ledger 一次返回全部，没有分页）。 */
   let stat = r;
   if (state.view === 'risk') {
     state.rows = state.rows.filter(hasRisk);
-    const pend = state.rows.filter((x) => x['状态'] !== '已报销');
-    const sum = (arr) => arr.reduce((a, x) => a + (num(x['价税合计']) || 0), 0);
+    const pend = state.rows.filter((x) => x['状态'] !== '已报销' && !isAttach(String(x['序号'])));
     stat = Object.assign({}, r, {
-      total: state.rows.length, sum: sum(state.rows),
-      pending_count: pend.length, pending_sum: sum(pend),
+      total: state.rows.length, sum: sumRows(state.rows),
+      pending_count: pend.length, pending_sum: sumRows(pend),
     });
   }
 
@@ -1252,14 +1294,101 @@ async function loadLedger() {
     const riskNote = state.view === 'risk'
       ? `　—　已按「有风险」筛出 <b>${state.rows.length}</b> 张（红字 / 重复报销）`
       : '';
-    sum.innerHTML = `${esc(filterSummary(state.filter))}　—　${hit}，合计 ${money(r.sum)}${riskNote}`;
+    // 合计跟生成的单据同一个口径：附件（行程单）已含在发票里，不重复计 —— 说清楚免得对不上数
+    const attNote = r.attach_count
+      ? `　·　另有 <b>${r.attach_count}</b> 张行程单是发票的附件（${money(r.attach_sum)}），已含在发票里、不重复计`
+      : '';
+    sum.innerHTML = `${esc(filterSummary(state.filter))}　—　${hit}，合计 ${money(stat.sum)}${attNote}${riskNote}`;
   }
 
+  renderBatchBar();                // 按批次分开看/分开报
   renderLedgerBody();
   renderLedgerStats(stat);
   syncSelectionUI();
   syncTvBadge(r.tv_todo);          // 「出行人核对」按钮上那个角标
   syncViewPills();                 // 胶囊高亮跟着真实条件走
+}
+
+/* ---------------------------------------------------------------------
+ * 「按批次分开报」
+ * ---------------------------------------------------------------------
+ * 用户要求：「可以分开，我也可以单独报，也可以分开」——两批票（比如烟台批、太仓批）
+ * 各是多少钱、涉及谁、什么时候，要能一眼看全，还要能一键只看这一批、全选这一批、
+ * 直接拿它出单。所以这里把「报销批次」做成一条可点的横条：点批次名 = 只看这一批，
+ * 点「全选」= 把这一批勾上，然后正常去出单区生成单据。
+ * ------------------------------------------------------------------- */
+function renderBatchBar() {
+  const holder = $('batch-bar');
+  if (!holder) return;
+  const list = state.byBatch || [];
+  // 只有一个批次、而且当前没按批次筛 —— 这条横条没什么可挑的，藏着省地方
+  if (list.length < 2 && !state.filter.batch) { holder.hidden = true; holder.innerHTML = ''; return; }
+  holder.hidden = false;
+
+  const cur = state.filter.batch || '';
+  const chip = (b) => {
+    const key = b.batch || '';
+    const label = key || '未填批次';
+    const on = cur === key;
+    const pend = b.pending
+      ? `<span class="bb-pend">${b.pending} 张待报</span>` : '<span class="bb-done">已报完</span>';
+    const who = (b.persons || []).slice(0, 4).map(esc).join('、')
+      + ((b.persons || []).length > 4 ? ` 等 ${b.persons.length} 人` : '');
+    const span = b.first ? (b.first === b.last ? b.first : `${b.first} ~ ${b.last}`) : '';
+    return `<div class="bb-chip${on ? ' on' : ''}" data-batch="${esc(key)}"
+        title="${esc(`${label}：${b.n} 张（含附件 ${b.n_attach} 张）｜计费 ${money(b.sum)}${span ? '｜' + span : ''}${who ? '｜' + who : ''}`)}">
+      <button class="bb-name" data-batch="${esc(key)}" data-act="pick">${esc(label)}</button>
+      <span class="bb-num">${b.n} 张 · <b>${money(b.sum)}</b></span>
+      <span class="bb-meta">${span ? esc(span) + '　' : ''}${pend}</span>
+      <button class="btn btn-sm bb-sel" data-batch="${esc(key)}" data-act="sel"
+        title="把这一批的凭证全部勾上，可直接去出单">全选这批</button>
+    </div>`;
+  };
+  const tot = list.reduce((a, b) => a + (b.sum || 0), 0);
+  const nAll = list.reduce((a, b) => a + (b.n || 0), 0);
+  holder.innerHTML = `
+    <div class="bb-head">
+      <span class="bb-title">按批次分开报</span>
+      <span class="bb-all">共 ${list.length} 批 · ${nAll} 张 · ${money(tot)}</span>
+      <button class="btn btn-sm" data-batch="" data-act="pick"
+        title="清掉批次筛选，看全部台账">全部</button>
+    </div>
+    <div class="bb-list">${list.map(chip).join('')}</div>`;
+}
+
+function onBatchBarClick(e) {
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const batch = b.dataset.batch || '';
+  if (b.dataset.act === 'pick') {
+    const sel = $('f-batch');
+    if (sel) {
+      // 先确认下拉里真有这一项，否则设不上（下拉的值来自后端 aggregates）
+      if (batch && !Array.from(sel.options).some((o) => o.value === batch)) {
+        const o = document.createElement('option');
+        o.value = batch; o.textContent = batch;
+        sel.appendChild(o);
+      }
+      sel.value = batch;
+    }
+    if (!batch) state.sel.clear();
+    loadLedger();
+    return;
+  }
+  if (b.dataset.act === 'sel') {
+    // 「全选这批」= 把当前表里属于这一批的行勾上（当前表已经按批次筛过了就是全部）
+    const key = batch;
+    let n = 0;
+    state.rows.forEach((r) => {
+      if (String(r['报销批次'] || '').trim() !== key) return;
+      if (isAttach(String(r['序号']))) return;      // 附件不勾：出单时它会自己跟主票走
+      state.sel.add(String(r['序号'])); n++;
+    });
+    syncSelectionUI();
+    renderLedgerBody();
+    toast(n ? `已勾选「${key || '未填批次'}」的 ${n} 张（附件自动跟主票，不用勾）`
+            : `这一批在当前表里没有可勾的凭证`, n ? 'ok' : 'warn');
+  }
 }
 
 /** 「出行人核对」按钮上挂个数字：还有几张的出行人没认出来 / 没人工核对过 */
@@ -1274,13 +1403,19 @@ function syncTvBadge(n) {
 function renderLedgerStats(r) {
   const boxes = [
     ['命中张数', r.total, 'accent'],
-    ['命中金额', money(r.sum), ''],
+    ['命中金额', money(r.sum), '', r.attach_count
+      ? `已排除 ${r.attach_count} 张行程单附件（${money(r.attach_sum)}）——它们的钱含在对应发票里，不重复计`
+      : ''],
     ['待报销', `${r.pending_count} 张`, 'warn'],
     ['待报销金额', money(r.pending_sum), 'ok'],
     ['台账合计', `${r.all_count} 行`, 'mute'],
   ];
-  const html = boxes.map(([lab, val, cls]) =>
-    `<div class="stat-box ${cls}" style="flex:1 1 130px;padding:9px 12px">
+  if (r.attach_count) {
+    boxes.push(['附件不重复计', `${r.attach_count} 张 · ${money(r.attach_sum)}`, 'mute',
+      '打车行程单这类「发票的证明附件」：金额已经含在对应那张发票里，合计里不再加一遍']);
+  }
+  const html = boxes.map(([lab, val, cls, tip]) =>
+    `<div class="stat-box ${cls}" style="flex:1 1 130px;padding:9px 12px"${tip ? ` title="${esc(tip)}"` : ''}>
       <div class="sb-num" style="font-size:17px">${esc(val)}</div>
       <div class="sb-lab">${esc(lab)}</div></div>`).join('');
   let holder = $('ledger-stats');
@@ -1380,7 +1515,8 @@ function renderLedgerBody() {
      分组头上是这一组的张数和金额——这一眼比一排筛选条件有用得多。 */
   const pending = state.rows.filter((r) => r['状态'] !== '已报销');
   const done = state.rows.filter((r) => r['状态'] === '已报销');
-  const sumOf = (arr) => arr.reduce((a, r) => a + (num(r['价税合计']) || 0), 0);
+  const sumOf = (arr) => arr.reduce(
+    (a, r) => a + (isAttach(String(r['序号'])) ? 0 : (num(r['价税合计']) || 0)), 0);
   const group = (label, arr, cls) => arr.length
     ? `<tr class="grp-row ${cls}"><td colspan="7">
          <span class="grp-lab">${label}</span>
@@ -1525,7 +1661,8 @@ function deleteOneRow(seq) {
     onOk: async () => {
       hideModal();
       const r = await call('delete_rows', [String(seq)]);
-      if (!r || r.error) { toast('删除失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
+      if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
+      if (r.error) { toast('删除失败：' + r.error, 'err'); return; }
       toast('已删除 1 条记录', 'ok');
       await loadLedger();
     },
@@ -1584,15 +1721,78 @@ async function setTraveler() {
       hideModal();
       // 走核对接口、而不是通用的 update_rows：手工指定也算「人工核对过」，
       // 免得在核对面板里又被提醒一遍。留空 = 清掉 + 撤掉核对标记。
-      const r = await call('save_traveler_review',
-        seqs.map((s) => ({ seq: String(s), name })), false);
-      if (!r || r.error) { toast('设置失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
-      toast(name ? `已把 ${r.updated} 张的出行人设为「${name}」` : `已清空 ${r.updated} 张的出行人`, 'ok');
+      // ⭐ 默认 protect=true：票面上印着姓名的行**不许被这个批量名字盖掉**，
+      //    后端会把它们拦在 protected 里原样不动（曾把邵自杰/陆兰玲的票全写成孙振强）。
+      const items = seqs.map((s) => ({ seq: String(s), name }));
+      const r = await call('save_traveler_review', items, false);
+      if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
+      if (r.error) { toast('设置失败：' + r.error, 'err'); return; }
+      const prot = r.protected || [];
+      if (prot.length) {
+        await loadLedger();
+        askFaceOverwrite(items, prot, name);
+        return;
+      }
+      toast((name ? `已把 ${r.updated} 张的出行人设为「${name}」` : `已清空 ${r.updated} 张的出行人`)
+        + staleNote(r), 'ok');
       await loadLedger();
     },
   });
   document.querySelectorAll('#modal-text [data-tv]').forEach((b) =>
     b.addEventListener('click', () => { $('tv-input').value = b.dataset.tv; }));
+}
+
+/**
+ * 「票面姓名保护」的二次确认。
+ *
+ * 批量设置出行人最容易出的事故：勾一片、填一个名字，把**票面上本来读对**的姓名一起盖掉
+ * （邵自杰、陆兰玲 的高铁票曾被全写成 孙振强，最后只能一张张 hand 填回来）。
+ * 所以后端先把这类行拦住不动，拿回 protected 名单，由这里问一句：真要覆盖吗？
+ *
+ * prot = [{seq, face(票面写的), cur(台账现在), new(你要填的), no, detail}]
+ * cb = 可选，「确定覆盖」之后要走的那一步（核对面板要带上它的 remember 等参数）
+ * 点「保持票面姓名」＝ 什么都不做 —— 该填的早就填好了，票面的按票面留着。
+ */
+function askFaceOverwrite(items, prot, name, cb) {
+  const n = prot.length;
+  const rows = prot.slice(0, 12).map((p) => `<tr>
+      <td class="td-c">${esc(p.seq)}</td>
+      <td>${esc(p.detail || p.no || '—')}</td>
+      <td class="td-c"><b class="tv-face">${esc(p.face)}</b></td>
+      <td class="td-c">${esc(p.cur || '—')}</td>
+    </tr>`).join('');
+  showModal({
+    title: `${n} 张票面上写着别的姓名，已按票面保留`,
+    html: `
+      <div class="card-hint" style="display:block;margin-bottom:10px">
+        下面这些凭证的<b>票面上白纸黑字印着乘客姓名</b>，跟要填的名字不一样（比如你填的是
+        「${esc(name)}」）—— 已经先<b>按票面留着没动</b>。
+        票面是可信来源，除非你确定票面写错了，否则别覆盖。
+      </div>
+      <div class="tbl-wrap" style="max-height:240px;overflow:auto">
+        <table class="tbl"><thead><tr>
+          <th class="td-c">序号</th><th>行程 / 票号</th>
+          <th class="td-c">票面姓名</th><th class="td-c">台账现在</th>
+        </tr></thead><tbody>${rows}</tbody></table>
+      </div>
+      ${n > 12 ? `<div class="card-hint" style="display:block;margin-top:8px">（只列了前 12 张，共 ${n} 张）</div>` : ''}`,
+    okText: `覆盖这 ${n} 张`,
+    cancelText: '保持票面姓名',
+    onOk: async () => {
+      hideModal();
+      if (cb) { await cb(); return; }
+      // protect=false：这次是用户看清楚了、明确要覆盖
+      const r2 = await call('save_traveler_review', items, false, false);
+      if (!r2) return;
+      if (r2.error) { toast('设置失败：' + r2.error, 'err'); return; }
+      toast(`已覆盖 ${r2.updated} 张（其中票面写了姓名的 ${n} 张）` + staleNote(r2), 'warn');
+      await loadLedger();
+    },
+    onCancel: () => {
+      toast(`票面写了姓名的 ${n} 张保持原样，其余该填的已填好`, 'ok');
+      loadLedger();
+    },
+  });
 }
 
 /* ---------------------------------------------------------------------
@@ -1607,7 +1807,8 @@ let tvr = null;      // {rows, stat, people, onlyTodo, syncPhone, remember, edit
 
 async function openTravelerReview() {
   const r = await call('traveler_review');
-  if (!r || r.error) { toast('读取核对清单失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
+  if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
+  if (r.error) { toast('读取核对清单失败：' + r.error, 'err'); return; }
   if (!r.rows || !r.rows.length) { toast('台账还是空的，先做一次「凭证入库」', 'warn'); return; }
   tvr = {
     rows: r.rows, stat: r.stat || {}, people: r.people || [],
@@ -1791,16 +1992,39 @@ async function saveTravelerReview() {
     });
   });
   if (!items.length) { hideModal(); toast('没有要保存的内容', 'warn'); return; }
+
+  /* ⭐ 面板里的「批量填入」照样能把票面姓名盖掉 —— 就拿面板已有的「来源」这一列
+     （x.src / x.auto）自己查一遍：票面白纸黑字写着姓名、却要被改成别的值 → 先问再写。 */
+  const clash = [];
+  items.forEach((it) => {
+    const x = tvr.rows.find((r) => r.seq === it.seq);
+    if (x && x.src === '票面' && x.auto && it.name && it.name !== x.auto) {
+      clash.push({ seq: it.seq, face: x.auto, cur: x.cur, new: it.name,
+                   no: x.no, detail: x.detail });
+    }
+  });
+
   const empty = items.filter((it) => !it.name).length;
   const remember = !!tvr.remember;
   hideModal();
-  const r = await call('save_traveler_review', items, remember);
-  if (!r || r.error) { toast('保存失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
+  tvr = null;                      // 面板已关，后面走独立流程
+  if (clash.length) {
+    askFaceOverwrite(items, clash, clash[0].new,
+      () => doSaveTraveler(items, remember, empty));
+    return;
+  }
+  await doSaveTraveler(items, remember, empty);
+}
+
+/** 核对面板真正落库那一步。protect=false：用户是逐行看着「来源」那一列才改的 */
+async function doSaveTraveler(items, remember, empty) {
+  const r = await call('save_traveler_review', items, remember, false);
+  if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
+  if (r.error) { toast('保存失败：' + r.error, 'err'); return; }
   let msg = `核对完成：确认 ${r.updated} 张`;
   if (r.remembered) msg += `，记住 ${r.remembered} 个手机号`;
   if (empty) msg += `；还有 ${empty} 张没填姓名`;
-  toast(msg, empty ? 'warn' : 'ok');
-  tvr = null;
+  toast(msg + staleNote(r), empty ? 'warn' : 'ok');
   await loadLedger();
 }
 
@@ -1898,13 +2122,18 @@ function deleteOutput(item) {
     title: '删除这个生成的文件？',
     html: `<b>${esc(item.name)}</b>${kb}<br>
            <span style="color:var(--text-secondary)">${esc(item.kind || '文件')}　${esc(item.time || '')}</span>`,
-    note: '文件会被送进 Windows 回收站（不是永久删除），需要的话可以去回收站还原。台账数据不受影响。',
+    // 容器/NAS 上没有 Windows 回收站 —— 后端是挪进「数据目录/回收站」，文案得跟着变，
+    // 不然用户在 NAS 上会去找一个根本不存在的 Windows 回收站。
+    note: state.serverMode
+      ? '文件会被挪进数据目录里的「回收站」文件夹（不是永久删除），需要的话能捞回来。台账数据不受影响。'
+      : '文件会被送进 Windows 回收站（不是永久删除），需要的话可以去回收站还原。台账数据不受影响。',
     okText: '删除',
     cancelText: '取消',
     onOk: async () => {
       hideModal();
       const r = await call('delete_output', item.path);
-      if (!r || r.error) { toast('删除失败：' + ((r && r.error) || '未知错误'), 'err'); return; }
+      if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
+      if (r.error) { toast('删除失败：' + r.error, 'err'); return; }
       toast(`已删除 ${r.name || item.name}（已送回收站）`, 'ok');
       await loadOutputs();
     },
@@ -2468,7 +2697,7 @@ function renderOutputs() {
       <span class="oi-time" title="${esc(meta)}">${esc(o.time || '')}</span>
       <button class="btn btn-sm" data-act="open" data-i="${i}"${o.exists ? '' : ' disabled'}>打开</button>
       <button class="btn btn-sm btn-ghost" data-act="reveal" data-i="${i}"${o.exists ? '' : ' disabled'}>定位</button>
-      <button class="btn btn-sm btn-danger" data-act="del" data-i="${i}">删除</button>
+      <button class="btn btn-sm btn-danger" data-act="del" data-i="${i}"${canDo('delete_output') ? '' : ' disabled title="当前身份没有删除权限，要用管理员登录"'}>删除</button>
     </div>`;
   }).join('');
 }
@@ -2721,7 +2950,9 @@ async function doQuit() {
  * 界面藏起按钮只是「不显眼」，真正的卡口在后端（每个接口都会再查一次权限）。
  * 这里拿到 whoami 的 can 表来决定显示哪些入口。
  * ===================================================================== */
-let meInfo = { user: '', role: '', role_cn: '', can: {}, auth: false };
+// err 非空＝这次没读到身份（会话失效 / 请求失败）。
+// 有了它，设置页才能把「为什么这块没了」写出来，而不是静默藏掉。
+let meInfo = { user: '', role: '', role_cn: '', can: {}, auth: false, err: '', allowed: null };
 
 /* ---------------------------------------------------------------------
  * 侧栏底部：当前登录是谁 + 退出登录
@@ -2741,13 +2972,94 @@ function initMe() {
 async function renderMe() {
   const box = $('sb-user');
   if (!box) return;
+  // call() 自己会把异常吞成 null（并弹 toast、记 lastError），这里不用再 try。
   const r = await call('whoami');
-  if (r && !r.error) meInfo = r;
+  if (r) {
+    meInfo = Object.assign({ err: '' }, r);
+  } else {
+    // 没读到身份：把权限表清掉。留着上一次的 can 会拿旧权限显示不该显示的入口。
+    meInfo = { user: '', role: '', role_cn: '', can: {}, auth: false, allowed: null,
+               err: call.lastError || '后端没返回身份' };
+  }
+  // 身份变了 → 能点的按钮也跟着变。
+  // 不这么做的话，业务人员登录后照样看得到「删除选中」，一点必然报错。
+  applyPermissions();
   if (!meInfo.auth) { box.hidden = true; return; }
   box.hidden = false;
   $('sb-user-name').textContent = meInfo.user || '未登录';
   $('sb-user-role').textContent = meInfo.role_cn || meInfo.role || '';
   box.title = `当前登录：${meInfo.user || ''}（${meInfo.role_cn || ''}）`;
+}
+
+/* ---------------------------------------------------------------------
+ * 权限：点不了的按钮直接灰掉，并且说清为什么
+ * ---------------------------------------------------------------------
+ * 「藏按钮不算数」说的是**后端**必须自己卡口（do_POST 里每个接口都会再查一次）；
+ * 但反过来「按钮亮着、点了报错」同样是坑 —— 用户报的「删除选中报错」就是这么来的：
+ * delete_rows 只有管理员能调，可这颗红按钮不论谁登录都显示。
+ * 权限表来自 whoami 的 allowed（就是后端 db.ROLE_ALLOW 那一份，不分家）。
+ * ------------------------------------------------------------------- */
+const PERM_BTNS = {
+  'btn-to-report':    'make_report',
+  'btn-mark-done':    'mark_rows',
+  'btn-mark-undone':  'mark_rows',
+  'btn-apply-cat':    'update_rows',
+  'btn-set-tv':       'update_rows',
+  'btn-review-tv':    'traveler_review',
+  'btn-reparse':      'refresh_rows',
+  'btn-del-sel':      'delete_rows',
+  'btn-clear-ledger': 'clear_ledger',
+  'btn-pick':         'start_import',
+  'btn-src-reset':    'start_import',
+  'btn-upload':       'start_import',
+  'btn-import':       'start_import',
+  'btn-export':       'export_summary',
+  'btn-make-report':  'make_report',
+  'btn-merge-plain':  'merge_invoices',
+  'btn-out-clear':    'delete_output',
+  'btn-audit':        'audit_list',
+  'btn-add-user':     'create_user',
+  'btn-save-cfg':     'set_config',
+  'btn-import-excel': 'import_from_excel',
+  'btn-save-pmap':    'set_phone_name',
+  'btn-reload-pmap':  'get_phone_map'
+};
+
+function canDo(method) {
+  // 本机模式（没设访问口令）压根没有角色这回事 —— 全部放行，跟以前一样
+  if (!meInfo || meInfo.auth !== true) return true;
+  // 后端没下发 allowed（版本对不上）时**不乱灰**：宁可亮着让后端去卡，
+  // 也不能因为读不到权限表就把界面锁死。
+  if (!Array.isArray(meInfo.allowed)) return true;
+  return meInfo.allowed.indexOf(method) >= 0;
+}
+
+function applyPermissions() {
+  const roleCn = (meInfo && (meInfo.role_cn || meInfo.role)) || '';
+  let blocked = 0;
+  Object.keys(PERM_BTNS).forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    const ok = canDo(PERM_BTNS[id]);
+    el.disabled = !ok;
+    if (ok) {
+      if (el.dataset.permTip) { el.removeAttribute('title'); delete el.dataset.permTip; }
+      el.classList.remove('perm-off');
+    } else {
+      blocked++;
+      const tip = `当前登录是「${roleCn}」，没有这个权限；要用管理员登录才能操作`;
+      if (el.title !== tip) { el.title = tip; el.dataset.permTip = '1'; }
+      el.classList.add('perm-off');
+    }
+  });
+  const hint = $('perm-hint');
+  if (hint) {
+    hint.hidden = !blocked;
+    if (blocked) {
+      hint.textContent = `当前登录：${(meInfo && meInfo.user) || ''}（${roleCn}）`
+        + '　灰掉的按钮这个身份不能用（要用管理员登录）';
+    }
+  }
 }
 
 /* =====================================================================
@@ -2887,10 +3199,18 @@ function initJobs() {
 }
 
 async function loadSettingsExtras() {
-  await renderMe();
-  initSettingsEvents();
-  await renderDbInfo();
-  await renderUsers();
+  // ⚠️ 原来这里是顺序 await：只要第一步（whoami）抛了（会话失效返 401 就会抛），
+  //    后面的 renderDbInfo / renderUsers 就**一次都不执行** —— 表现是
+  //    「设置页里账号与权限整块不见了、台账信息也空着」，而且不报任何错。
+  //    改成一个一个来，谁出事谁在控制台留话，不牵连别人。
+  const steps = [renderMe, initSettingsEvents, renderDbInfo, renderUsers];
+  for (const fn of steps) {
+    try {
+      await fn();
+    } catch (e) {
+      console.error('[设置页]', fn.name, '失败：', e);
+    }
+  }
 }
 
 function initSettingsEvents() {
@@ -2909,12 +3229,48 @@ function initSettingsEvents() {
   $('btn-audit').addEventListener('click', showAudit);
 }
 
+/** 把「这块为什么进不去」写成人话 —— 藏掉卡片只会让人以为功能没了。 */
+function usersBlockedHtml() {
+  if (!meInfo.role) {
+    const why = meInfo.err ? esc(meInfo.err) : '登录状态多半已过期';
+    return `读不到当前身份：${why}。<a href="/login">重新登录</a>之后这块会自动回来。`;
+  }
+  const who = esc(meInfo.user || '') + '（' + esc(meInfo.role_cn || meInfo.role) + '）';
+  return `当前登录是 <b>${who}</b>，这个身份没有账号管理权限。`
+    + '<br>要用访问口令登录才算管理员：<a href="/logout">退出登录</a>，'
+    + '在登录页把<b>用户名那一栏留空</b>、只填口令即可。';
+}
+
 async function renderUsers() {
   const card = $('card-users');
-  if (!meInfo.can || !meInfo.can.list_users) { card.style.display = 'none'; return; }
+  if (!card) return;
+  const form = $('btn-add-user') ? $('btn-add-user').closest('.filter-row') : null;
+  const help = card.querySelector('.role-help');
+
+  // ⚠️ 这里原来是「查不到就 card.style.display='none' 直接藏掉」——
+  //    结果用户只看到「这块没了」，既不知道为什么、也不知道怎么才能拿到权限，
+  //    只能来问「怎么没有账号权限了」。现在改成：卡片照留，把原因写清楚，
+  //    但把「新增账号」的表单收起来（看得见原因，动不了手）。
+  const showDenied = (why) => {
+    card.style.display = '';
+    if (form) form.style.display = 'none';
+    if (help) help.style.display = 'none';
+    $('user-list').innerHTML = `<div class="card-hint" style="display:block">${why}</div>`;
+  };
+
+  if (!meInfo.can || !meInfo.can.list_users) { showDenied(usersBlockedHtml()); return; }
+
   const r = await call('list_users');
-  if (!r || r.error) { card.style.display = 'none'; return; }
+  if (!r) {
+    // 身份上写着有权限、这一下却没读到 → 是请求本身出了问题（会话过期、后端报错）
+    showDenied('没能读到账号列表'
+      + (call.lastError ? `：${esc(call.lastError)}` : '')
+      + '。<a href="/login">重新登录</a>或点上面的「刷新」再试。');
+    return;
+  }
   card.style.display = '';
+  if (form) form.style.display = '';
+  if (help) help.style.display = '';
   const roles = r.roles || {};
   const roleOpts = (cur) => Object.entries(roles).map(([k, v]) =>
     `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(v)}</option>`).join('');
@@ -3281,6 +3637,7 @@ function boot() {
   $('modal-cancel').addEventListener('click', hideModal);
   $('modal-ok').addEventListener('click', () => {
     const fn = modalOk;
+    modalCancel = null;          // 点了「确定」就不算取消
     if (fn) fn();
     else hideModal();
   });

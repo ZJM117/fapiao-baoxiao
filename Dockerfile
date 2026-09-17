@@ -6,12 +6,19 @@
 #
 #  构建并启动：docker compose up -d
 #  改了代码之后：docker compose up -d --build
+#
+#  排障看日志：docker logs -f <容器名>
+#    FB_LOG_LEVEL=DEBUG（本文件已默认设上）会把每次接口调用都打一行：
+#    「❌ delete_rows 失败（1ms；wangwu/业务人员）：权限不足…」—— 谁、什么身份、
+#    为什么失败一眼可见；界面左边「运行记录」页看到的是同一份（不用 SSH）。
+#    嫌吵就把 FB_LOG_LEVEL 改成 INFO（只留错误/警告）。
 # =====================================================================
 FROM python:3.12-slim-bookworm
 
 ENV TZ=Asia/Shanghai \
     DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
     PYTHONDONTWRITEBYTECODE=1
 
 # 时区：不设的话容器里是 UTC，报销单上的「制表时间」会差 8 小时
@@ -46,7 +53,8 @@ ENV FB_SERVER=1 \
     FB_HOST=0.0.0.0 \
     FB_PORT=8766 \
     FB_DATA_DIR=/data \
-    FB_SOURCE=/票据
+    FB_SOURCE=/票据 \
+    FB_LOG_LEVEL=DEBUG
 
 RUN mkdir -p /data /票据
 VOLUME ["/data"]

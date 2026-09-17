@@ -989,3 +989,87 @@ tbody tr:hover { background: var(--table-row-hover); }
 }
 .g-tip b { color: var(--text-primary); }
 .g-path { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
+
+/* =====================================================================
+ * ⑮ 权限：点不了的按钮压灰，并说明为什么
+ * ---------------------------------------------------------------------
+ * 用户报「Docker 版删除选中报错」。根因不是后端坏了 —— db.ROLE_ALLOW 里
+ * delete_rows / clear_ledger 只有 admin 能调，而「删除选中」「清空台账」
+ * 这两颗红按钮对**所有角色**都显示，点了必然被挡住。
+ * 现在按 whoami().allowed 压灰 + title 说明（真正的卡口仍在后端 do_POST）。
+ * ===================================================================== */
+.perm-hint {
+  align-self: center;
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.btn.perm-off,
+.btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+  filter: grayscale(.35);
+}
+.btn.perm-off:hover,
+.btn:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+/* =====================================================================
+ * ⑯ 「按批次分开报」横条 + 票面姓名保护
+ * ---------------------------------------------------------------------
+ * 「金额对不上」的两处根因，各自对应下面一块：
+ *   ① 台账页把附件（打车行程单）也加了一遍钱 → 合计口径改成跟单据一致（附件不重复计）；
+ *   ② 两个文件夹的票（太仓批 / 烟台批）被硬加成一个 4361.00 → 现在按「报销批次」分开统计，
+ *      点批次名 = 只看这一批，点「全选这批」= 直接拿去出单，两批各报各的。
+ * 另外「设置出行人」批量填名字会把票面本来读对的姓名盖掉，现在会先拦下来问一句。
+ * 颜色只用 style.css 里随主题变的变量，不在任何主题块里写死。
+ * ===================================================================== */
+.batch-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-card-hover);
+}
+.bb-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.bb-title { font-weight: 620; font-size: 13px; color: var(--text-primary); }
+.bb-all { flex: 1 1 auto; font-size: 12px; color: var(--text-secondary); }
+.bb-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.bb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px 5px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.bb-chip.on { border-color: var(--accent); background: var(--accent-subtle); }
+.bb-name {
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 620;
+  color: var(--accent);
+}
+.bb-name:hover { text-decoration: underline; }
+.bb-num b { color: var(--text-primary); }
+.bb-meta { color: var(--text-tertiary); }
+.bb-pend { color: var(--yellow); }
+.bb-done { color: var(--green); }
+.bb-sel { padding: 2px 8px; font-size: 11px; }
+.tv-face { color: var(--accent); white-space: nowrap; }

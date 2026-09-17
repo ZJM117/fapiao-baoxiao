@@ -252,7 +252,14 @@ chk(led["attach_links"].get("3", {}).get("main_seq") == "1",
     "标记里写明是第 1 号发票的附件", led["attach_links"].get("3"))
 chk(led["attach_links"].get("5", {}).get("main_amount") == 13.58,
     "标记里带上了主发票金额（13.58）", led["attach_links"].get("5"))
-chk(abs(led["sum"] - 528.45) < 0.01, f"台账金额合计仍是全量 528.45（实际 {led['sum']}）")
+# 2026-09-17 起台账页「合计」改成跟单据同一个口径（附件不重复计）：
+# 全量数字挪到 sum_raw 留作对照，被排除的附件金额单独给 attach_sum。
+chk(abs(led["sum"] - 438.77) < 0.01,
+    f"台账「合计」＝计费口径 438.77（行程单 76.10+13.58 已含在发票里，不再加）实际 {led['sum']}")
+chk(abs(led.get("sum_raw", 0) - 528.45) < 0.01,
+    f"全部行硬加 sum_raw 仍是全量 528.45（实际 {led.get('sum_raw')}）")
+chk(abs(led.get("attach_sum", 0) - 89.68) < 0.01,
+    f"被排除的附件金额 = 76.10+13.58 = 89.68（实际 {led.get('attach_sum')}）")
 
 section("九、筛选后只选一张时，别把它当附件（避免金额对不上）")
 led2 = api.get_ledger({"ctype": "打车行程单"})

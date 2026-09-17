@@ -146,6 +146,104 @@ def main():
         else:
             print(f"    ✅ {name}: {len(color_keys)} 条颜色变量齐全")
 
+    print("\n[7] 登录页文案必须跟代码一致（界面说的 ≠ 程序做的 是最难查的那种坑）")
+    # 代码里：只用访问口令登录 → _after_login("口令用户", "admin") —— 是管理员。
+    # 登录页原来却写着「没有账号就只填访问口令（只读）」，跟程序反着说，
+    # 用户照着理解就会以为「必须用账号密码登录」，然后拿一个非管理员账号
+    # 进去发现「设置页里账号与权限整块没了」。
+    web = read(ROOT / "app_web.py") if (ROOT / "app_web.py").exists() else ""
+    login = re.search(r'LOGIN_PAGE\s*=\s*"""(.*?)"""', web, re.S)
+    if not login:
+        problems.append("在 app_web.py 里找不到 LOGIN_PAGE，没法核对登录页文案")
+        print("    ❌ 找不到 LOGIN_PAGE")
+    else:
+        page = login.group(1)
+        if "只读" in page:
+            problems.append("登录页还写着访问口令是「只读」，但代码给的是管理员（界面与程序不一致）")
+            print("    ❌ 登录页仍写着访问口令「只读」")
+        else:
+            print("    ✅ 登录页没有「访问口令＝只读」这种与代码相反的说法")
+        if "管理员" in page:
+            print("    ✅ 登录页写明了「只填访问口令＝管理员」")
+        else:
+            problems.append("登录页没说明「只填访问口令就是管理员」，用户不知道该往哪登录")
+            print("    ❌ 登录页没说访问口令＝管理员")
+        if "口令用户" in web and "role=\"admin\"" in web:
+            print("    ✅ 代码里访问口令那条路确实给的是 admin（文案与代码同向）")
+        else:
+            problems.append("代码里「口令登录＝管理员」这条不见了，登录页文案要跟着改")
+            print("    ❌ 代码里找不到「口令登录＝admin」")
+
+    print("\n[8] 排障日志链 + 按钮权限（用户报「删除报错、容器日志啥也没有」）")
+    # 那次的两个根因都不是「后端坏了」：
+    #   ① 三个日志闸门各管一段（_log_line 只写文件、Api._log 只进内存+stdout、
+    #      do_POST 里的异常三个都不进）→ docker logs 永远空白；
+    #   ② delete_rows/clear_ledger 只有 admin 能调，可那两颗红按钮对所有角色都显示。
+    # 这两条一旦被改回去，用户又会掉进「点了报错但查不到」的坑里，所以写死在这里守着。
+    dockerfile = read(ROOT / "Dockerfile") if (ROOT / "Dockerfile").exists() else ""
+    app = read(ROOT / "gui" / "app.js") if (ROOT / "gui" / "app.js").exists() else ""
+
+    def need(cond, ok_msg, bad_msg):
+        if cond:
+            print("    ✅ " + ok_msg)
+        else:
+            problems.append(bad_msg)
+            print("    ❌ " + bad_msg)
+
+    need("def _force_utf8_streams" in web,
+         "启动时把 stdout/stderr 强制成 UTF-8（否则中文日志被编码异常吞掉＝什么都没打）",
+         "少了 _force_utf8_streams：容器 locale 是 C 时中文日志会静默丢失")
+    need('f.write(line + "\\n")' in web and "_safe_print(line)" in web,
+         "_log_line 同时写文件 + stdout（docker logs 才看得到）",
+         "_log_line 又只写文件了 —— docker logs 会变回一片空白")
+    need("_push_log(msg" in web and '"seq": _LOG_SEQ' in web,
+         "日志同时进界面「运行记录」（不用 SSH 就能看）",
+         "日志没接进界面运行记录（poll 还在读旧的 self._logs）")
+    need("def _log_api_call" in web and "self._log_api_call(name, error, t0, tb)" in web,
+         "每个接口调用都留一行（接口名/身份/角色/耗时/成败）",
+         "do_POST 没有逐调用记日志：出错了查不到谁在什么时候调了什么")
+    need("traceback.format_exc()" in web,
+         "接口抛异常时打完整堆栈",
+         "异常没有堆栈：只有一句 error，定位不到哪一行")
+    need("QUIET_API" in web,
+         "高频轮询（poll / list_jobs）静音，不刷屏",
+         "没有静音名单：poll 每 0.4s 一条会把真正要看的东西冲走")
+    need("def _allowed_methods" in web and '"allowed": _allowed_methods(r)' in web,
+         "whoami 下发完整权限表（界面据此压灰按钮）",
+         "whoami 没下发 allowed：界面没法判断哪些按钮该灰")
+    need("function applyPermissions" in app and "PERM_BTNS" in app
+         and "'btn-del-sel'" in app and "'delete_rows'" in app,
+         "界面按权限压灰「删除选中」这类按钮",
+         "界面没按权限压灰按钮：业务员会看到点了必然报错的「删除选中」")
+    need("FB_LOG_LEVEL" in dockerfile and "PYTHONIOENCODING=utf-8" in dockerfile,
+         "Dockerfile 里设了 FB_LOG_LEVEL / PYTHONIOENCODING",
+         "Dockerfile 没设 FB_LOG_LEVEL / PYTHONIOENCODING：容器日志要么没有、要么乱码")
+
+    print("\n[9] 金额口径只有一处 + 票面姓名保护（用户报「4361 加了两遍打车、高铁票名字识别不到」）")
+    # 同样不是「后端算错了」，而是**同一个数在两边各算一遍、算法还不一样**：
+    #   ① 台账页的合计自己把每行硬加，把附件（打车行程单）也加进去了；
+    #      生成单据那边是排除附件的 → 同一份数据两个数（4361.00 / 4284.90）；
+    #   ② 两个文件夹的票（太仓批 / 烟台批）被加成一个数 → 现在按批次分组下发；
+    #   ③ 高铁票的姓名票面上**读得完全正确**，是被「设置出行人」批量填名字盖掉了。
+    # 这三条被改回去任何一条，用户又会看到「金额对不上 / 名字全是我自己输的」。
+    ledger_src = read(ROOT / "ledger.py") if (ROOT / "ledger.py").exists() else ""
+    need('"sum_raw"' in web and "attach_seqs" in web and "def _by_batch" in web,
+         "get_ledger 同时给「计费合计」+「全部行硬加」+「按批次分组」",
+         "get_ledger 又只给一个合计：界面无从解释「为什么和你算的差一张行程单」")
+    need("def _face_names" in web and "protect=True" in web and "tv.SRC_FACE" in web,
+         "save_traveler_review 默认保护票面来源的姓名（要覆盖得二次确认）",
+         "票面姓名保护没了：批量填名字又会把票面上白纸黑字写的姓名一起盖掉")
+    need("function isAttach" in app and "function renderBatchBar" in app
+         and "function askFaceOverwrite" in app,
+         "界面三件都在：附件不计钱 / 按批次分开报 / 覆盖前二次确认",
+         "界面少了「附件不计钱」「批次条」「覆盖确认」中的某一项")
+    need("let modalCancel = null" in app and "modalCancel = o.onCancel" in app,
+         "弹层支持 onCancel 回调（关掉弹层时把界面状态收拾干净）",
+         "showModal 不支持 onCancel：用户点「保持票面姓名」后界面会和台账对不上")
+    need("_export_excel_soft" in ledger_src and "def excel_stale" in ledger_src,
+         "Excel 快照导出失败不再让整个操作报错（库才是唯一可信源）",
+         "Excel 被占用时又会报「文件正被占用」：其实库已经改好了，用户以为白改了一遍")
+
     print("\n" + "=" * 56)
     if problems:
         print("发现问题：")

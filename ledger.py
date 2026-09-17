@@ -453,7 +453,7 @@ def add_records(recs: list, category: str = "", person: str = "", batch: str = "
 
     allrows = db.all_rows()
     if changed:
-        export_excel()
+        _export_excel_soft()
         _fill_seq(added, allrows)
         db.audit("入库", "ledger", "",
                  after={"新增": len(added), "已有": len(in_ledger), "重复风险": len(dup),
@@ -462,6 +462,35 @@ def add_records(recs: list, category: str = "", person: str = "", batch: str = "
                                      for r in added][:200]})
     return {"added": added, "in_ledger": in_ledger, "dup": dup, "manual": manual,
             "patched": patched, "all": allrows}
+
+
+# ------------------------------------------------------------------ Excel 快照
+# ⚠️ Excel（发票台账.xlsx）只是「给人看的副本」，**库（发票台账.db）才是唯一可信源**。
+# 快照写不出去最常见的原因是用户正开着 Excel —— 这时候数据其实**已经改好了**
+# （db.write_tx() 事务已提交），却会因为这个副本抛错、让界面弹「台账文件正被占用」，
+# 用户以为是白操作了一遍，还会反复点。所以快照一律走软导出：失败只记一笔，
+# 操作本身照样算成功，界面补一句「Excel 快照还没更新」。
+_EXCEL_STALE = {"err": ""}
+
+
+def excel_stale() -> str:
+    """上一次写 Excel 快照失败的原因（空字符串＝一切正常）。界面拿它提示「快照待刷新」"""
+    return str(_EXCEL_STALE.get("err") or "")
+
+
+def clear_excel_stale() -> None:
+    _EXCEL_STALE["err"] = ""
+
+
+def _export_excel_soft() -> bool:
+    """导 Excel 快照，失败不抛（原因记在 excel_stale() 里）。返回是否成功。"""
+    try:
+        export_excel()
+        _EXCEL_STALE["err"] = ""
+        return True
+    except Exception as e:                                          # noqa: BLE001
+        _EXCEL_STALE["err"] = f"{type(e).__name__}: {e}"
+        return False
 
 
 def _fill_seq(added: list, allrows: list):
@@ -525,7 +554,7 @@ def update_rows(seqs, **fields) -> int:
     except sqlite3.OperationalError as e:
         raise LedgerBusy(f"台账数据库正忙（{e}），请稍后重试") from e
     if n:
-        export_excel()
+        _export_excel_soft()
         db.audit("修改台账", "invoice", "",
                  before=[c["before"] for c in changes],
                  after={"fields": fields, "rows": n})
@@ -561,7 +590,7 @@ def patch_rows(mapping: dict) -> int:
     except sqlite3.OperationalError as e:
         raise LedgerBusy(f"台账数据库正忙（{e}），请稍后重试") from e
     if n:
-        export_excel()
+        _export_excel_soft()
         db.audit("重新识别", "ledger", "",
                  after={"rows": n,
                         "fields": sorted({k for f in mapping.values() if f for k in f})})
@@ -594,7 +623,7 @@ def delete_rows(seqs) -> int:
         raise LedgerBusy(f"台账数据库正忙（{e}），请稍后重试") from e
     n = len(before)
     if n:
-        export_excel()
+        _export_excel_soft()
         db.audit("删除台账行", "invoice", "", before=before)
     return n
 
@@ -610,7 +639,7 @@ def clear_ledger() -> int:
             db.clear_all(conn)
     except sqlite3.OperationalError as e:
         raise LedgerBusy(f"台账数据库正忙（{e}），请稍后重试") from e
-    export_excel()
+    _export_excel_soft()
     db.audit("清空台账", "ledger", "", before={"count": n})
     return n
 

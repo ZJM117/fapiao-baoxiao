@@ -280,6 +280,8 @@
           <div class="card-title">凭证明细</div>
           <div class="card-hint" id="ledger-hint">加载中…</div>
         </div>
+        <!-- 「按批次分开报」：点批次名只看这一批、点「全选这批」直接拿它出单 -->
+        <div class="batch-bar" id="batch-bar" hidden></div>
         <div class="bulk-bar" id="bulk-bar">
           <span class="sel-count" id="sel-count">未选中</span>
           <button class="btn btn-sm" id="btn-sel-all">全选本页</button>
@@ -301,6 +303,7 @@
           <span class="bulk-sep"></span>
           <button class="btn btn-sm btn-danger" id="btn-del-sel">删除选中</button>
           <button class="btn btn-sm btn-danger" id="btn-clear-ledger">清空台账</button>
+          <span class="perm-hint" id="perm-hint" hidden></span>
         </div>
         <div class="table-wrap">
           <table>

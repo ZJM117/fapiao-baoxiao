@@ -35,7 +35,15 @@
     }).then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
-    }).then(function (j) { return j.result; });
+    }).then(function (j) {
+      // ⚠️ 后端出错时 result 是 null、原因放在 error 里。以前这里直接 return j.result，
+      //    把 error 整个丢掉 —— 于是「权限不足：当前身份是业务人员，不能执行这一步」
+      //    这类具体原因永远到不了界面，用户只看到笼统的「调用失败」。
+      //    这里把 error 抛出去：上层 call() 会转成 toast 并照样返回 null（契约不变，
+      //    所以所有「拿到 null 就当作没成功」的调用点不受影响）。
+      if (j && j.error) throw new Error(j.error);
+      return j.result;
+    });
   }
 
   var apiObj = {};

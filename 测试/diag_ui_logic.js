@@ -21,8 +21,18 @@ const src = fs.readFileSync(path.join(GUI, 'app.js'), 'utf8');
 
 const mkEl = (id) => ({
   id, innerHTML: '', textContent: '', value: '', checked: false, indeterminate: false,
-  style: {}, dataset: {}, scrollTop: 0, disabled: false,
-  classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+  style: {}, dataset: {}, scrollTop: 0, disabled: false, title: '', hidden: false,
+  // classList 以前是空的假桩（contains 永远 false）—— 权限压灰要断言 perm-off，
+  // 假桩测不出来。换成真 Set，语义跟浏览器一致，对既有用例等价（没人加过 active）。
+  classList: {
+    _s: new Set(),
+    add(c) { this._s.add(c); },
+    remove(c) { this._s.delete(c); },
+    toggle(c) { this._s.has(c) ? this._s.delete(c) : this._s.add(c); },
+    contains(c) { return this._s.has(c); },
+  },
+  setAttribute(k, v) { if (k === 'title') this.title = v; },
+  removeAttribute(k) { if (k === 'title') this.title = ''; },
   addEventListener() {}, insertAdjacentElement() {}, appendChild() {}, remove() {},
   closest() { return null; }, querySelector() { return mkEl('inner'); }, querySelectorAll() { return []; },
 });
@@ -87,6 +97,15 @@ const box = new Function(
       + ' readFolds, saveFold, setFold, toggleFold, setFoldGroup, openWorkPanel, applyFolds, LS,'
       // 使用说明（2026-09-17）：内容表、拼 HTML、入口
       + ' GUIDE, guideHtml, showGuide, initGuide, markGuideSeen,'
+      // 设置页「账号与权限」（2026-09-17）：卡片为什么显示/隐藏、怎么解释
+      + ' renderUsers, loadSettingsExtras, usersBlockedHtml, call,'
+      // 权限压灰（2026-09-17）：点不了的按钮不许亮着
+      + ' applyPermissions, canDo, PERM_BTNS,'
+      // 「按批次分开报」+ 合计口径 + 票面姓名保护（2026-09-17 第三轮）
+      + ' renderBatchBar, onBatchBarClick, isAttach, askFaceOverwrite, doSaveTraveler,'
+      + ' selectedSum, renderLedgerStats, syncSelectionUI,'
+      // meInfo 是模块级 let，这里开个读写口子只为测试用
+      + ' setMeTest: (v) => { meInfo = v; }, getMeTest: () => meInfo,'
       // tvr 是 app.js 里的模块级 let，这里用闭包拿一个读写口子（只为测试用）
       + ' setTvrTest: (v) => { tvr = v; }, getTvrTest: () => tvr};'
 )();
@@ -973,10 +992,229 @@ global.window.pywebview = { api: { list_jobs: async () => fakeJobs } };
     // 后端报错时不能白屏
     fakeJobs = { error: 'db.py: database is locked' };
     return box.renderJobs();
-  }).then(() => {
+  }).then(async () => {
     chk(els['job-list'].innerHTML.includes('读不到任务列表'), '后端出错时如实显示，不白屏',
       els['job-list'].innerHTML);
-  });
+
+  /* =====================================================================
+   * 设置页「账号与权限」为什么不见了（2026-09-17 用户报的 bug）
+   * ---------------------------------------------------------------------
+   * 原来 renderUsers() 在「没权限 / 读不到身份」时直接把整块卡片
+   * display:none 藏掉 —— 用户只看到「这块没了」，既不知道为什么、
+   * 也不知道要去哪拿权限，只能来问「怎么没有账号权限了」。
+   * 现在必须把原因和办法写在页面上。
+   * ===================================================================*/
+  console.log('— 设置页账号与权限（不许静默消失）—');
+  {
+    const setMe = (o) => box.setMeTest(Object.assign(
+      { user: '', role: '', role_cn: '', can: {}, auth: false, err: '' }, o));
+    const card = els['card-users'] || (els['card-users'] = mkEl('card-users'));
+    const list = els['user-list'] || (els['user-list'] = mkEl('user-list'));
+
+    // ① 当前身份是业务人员：卡片不能消失，要写明「谁 / 为什么 / 怎么办」
+    setMe({ user: '王涛', role: 'biz', role_cn: '业务人员', auth: true,
+            can: { list_users: false } });
+    await box.renderUsers();
+    chk(card.style.display !== 'none',
+      '非管理员：卡片不再整块藏掉（藏了就等于「功能凭空没了」）',
+      'display=' + card.style.display);
+    chk(list.innerHTML.includes('业务人员') && list.innerHTML.includes('没有账号管理权限'),
+      '非管理员：写明当前身份和原因', list.innerHTML);
+    chk(list.innerHTML.includes('访问口令') && list.innerHTML.includes('留空'),
+      '非管理员：告诉用户怎么才能拿到权限（访问口令 / 用户名留空）', list.innerHTML);
+
+    // ② 身份读不到（会话失效）：说「重新登录」，别诬赖成「你没权限」
+    setMe({ err: 'HTTP 401' });
+    await box.renderUsers();
+    chk(card.style.display !== 'none', '读不到身份：卡片照留');
+    chk(list.innerHTML.includes('读不到当前身份') && list.innerHTML.includes('重新登录'),
+      '读不到身份：提示重新登录', list.innerHTML);
+    chk(!list.innerHTML.includes('没有账号管理权限'),
+      '会话过期不能说成「你没权限」（两回事，用户照着做会白折腾）', list.innerHTML);
+
+    // ③ 管理员：给 api() 塞个假的 list_users，列表要真的渲染出来
+    global.window.pywebview = { api: { list_users: () => Promise.resolve({
+      roles: { admin: '管理员', biz: '业务人员' },
+      rows: [{ username: 'admin', role: 'admin', role_cn: '管理员',
+               display_name: '管理员', dept: '', disabled: false,
+               last_login: '2026-09-17 09:58' }] }) } };
+    setMe({ user: 'admin', role: 'admin', role_cn: '管理员', auth: true,
+            can: { list_users: true } });
+    await box.renderUsers();
+    chk(card.style.display !== 'none', '管理员：卡片显示');
+    chk(list.innerHTML.includes('admin') && list.innerHTML.includes('管理员'),
+      '管理员：账号列表真的渲染出来了', list.innerHTML.slice(0, 200));
+    chk(els['nu-role'].innerHTML.includes('value="admin"'), '角色下拉被填上选项');
+    chk(!list.innerHTML.includes('没有账号管理权限'), '管理员不该看到「没权限」那套话');
+    delete global.window.pywebview;
+
+    // ④ 源码级护栏：别再犯回去
+    chk(!/if \(!meInfo\.can \|\| !meInfo\.can\.list_users\) \{ card\.style\.display = 'none'/
+      .test(src), 'renderUsers 里不再有「查不到就 display=none 直接藏」的老写法');
+    const lse = src.slice(src.indexOf('async function loadSettingsExtras'),
+                          src.indexOf('function initSettingsEvents'));
+    chk(/for \(const fn of steps\)/.test(lse) && /catch/.test(lse),
+      'loadSettingsExtras 逐步兜底：一步失败不再带停后面两步', lse.slice(0, 160));
+    // ⚠️ bridge.js 以前只 return j.result，把后端的 error 整个丢掉 ——
+    //    于是「权限不足：当前身份是…」永远到不了界面。这条盯着别再丢。
+    const bridge = fs.readFileSync(path.join(GUI, 'bridge.js'), 'utf8');
+    chk(/if \(j && j\.error\) throw/.test(bridge),
+      'bridge.js 把后端的 error 抛出去（不再静默丢掉具体原因）');
+  }
+
+  /* =====================================================================
+   * 点不了的按钮不许亮着（2026-09-17 用户报「删除选中报错」）
+   * ---------------------------------------------------------------------
+   * db.ROLE_ALLOW 里 delete_rows / clear_ledger 只有 admin 能调，可这两颗红按钮
+   * 对**所有角色**都显示 —— 业务员一点必然被后端挡住，用户看到的就是「报错」。
+   * 现在按 whoami().allowed 压灰 + 说明；真正的卡口仍然在后端 do_POST。
+   * ===================================================================*/
+  console.log('— 权限：点不了的按钮压灰 —');
+  {
+    const setMe = (o) => box.setMeTest(Object.assign(
+      { user: '', role: '', role_cn: '', can: {}, auth: false, err: '', allowed: null }, o));
+    const hint = els['perm-hint'] || (els['perm-hint'] = mkEl('perm-hint'));
+
+    chk(box.PERM_BTNS['btn-del-sel'] === 'delete_rows',
+      '「删除选中」登记为需要 delete_rows 权限');
+    chk(box.PERM_BTNS['btn-clear-ledger'] === 'clear_ledger',
+      '「清空台账」登记为需要 clear_ledger 权限');
+
+    // ① 业务人员：两颗红按钮必须灰掉，并且说明为什么
+    setMe({ user: '王涛', role: 'biz', role_cn: '业务人员', auth: true,
+            allowed: ['get_ledger', 'make_report'] });
+    box.applyPermissions();
+    chk(els['btn-del-sel'].disabled === true,
+      '业务人员：「删除选中」被压灰（不再是点了才报错）');
+    chk(/没有这个权限/.test(els['btn-del-sel'].title || ''),
+      '压灰的同时说清原因', els['btn-del-sel'].title);
+    chk(els['btn-clear-ledger'].disabled === true, '业务人员：「清空台账」同样压灰');
+    chk(els['btn-to-report'].disabled === false, '但该给的按钮不受影响（业务员能出单）');
+    chk(hint.hidden === false && /业务人员/.test(hint.textContent || ''),
+      '页面上有一句「当前登录是…灰掉的按钮不能用」', hint.textContent);
+
+    // ② 管理员：全部恢复可点，提示收起
+    setMe({ user: '口令用户', role: 'admin', role_cn: '管理员', auth: true,
+            allowed: Object.keys(box.PERM_BTNS).map((k) => box.PERM_BTNS[k])
+              .concat(['get_ledger']) });
+    box.applyPermissions();
+    chk(els['btn-del-sel'].disabled === false, '管理员：「删除选中」恢复可点');
+    chk(els['btn-clear-ledger'].disabled === false, '管理员：「清空台账」恢复可点');
+    chk(hint.hidden === true, '管理员：那句提示收起来');
+
+    // ③ 本机模式 / 老后端没下发 allowed → 不许乱灰（否则界面被锁死）
+    setMe({ auth: false });
+    box.applyPermissions();
+    chk(els['btn-del-sel'].disabled === false, '本机模式（没有登录这回事）：全部放行');
+    setMe({ user: '王涛', role: 'biz', role_cn: '业务人员', auth: true, allowed: null });
+    box.applyPermissions();
+    chk(els['btn-del-sel'].disabled === false,
+      '后端没下发 allowed（版本对不上）：宁可不灰，也别把界面锁死');
+
+    // ④ 源码守则：canDo 认的是后端下发的 allowed，不许凭角色名字硬编码
+    const permSrc = src.slice(src.indexOf('function canDo'),
+      src.indexOf('function applyPermissions'));
+    chk(/meInfo\.allowed/.test(permSrc),
+      'canDo 看的是后端下发的 allowed', permSrc.slice(0, 120));
+    chk(permSrc.indexOf("'admin'") < 0 && permSrc.indexOf("'biz'") < 0,
+      'canDo 不靠角色名字硬编码（白名单以后改了这里也不会飘）');
+  }
+/* =====================================================================
+ * 「按批次分开报」+ 合计口径 + 票面姓名保护（2026-09-17 第三轮）
+ * ---------------------------------------------------------------------
+ * 用户报：「首先，识别的 4361，加了两边打车的；而且报销的里边有高铁票，
+ *          高铁票不是有名字吗，怎么识别不到，全都得是我自己输入的人名。」
+ *   · 4361.00 = 太仓批 3795.80 + 烟台批 565.20（两个文件夹的票被硬加成一个数），
+ *     且台账页把附件（那张 76.10 的行程单）也加了一遍 → 合计口径改成跟单据一致；
+ *   · 高铁姓名其实**读到了**，是被「设置出行人」批量填名字盖掉的 → 加票面姓名保护。
+ * ===================================================================*/
+console.log('\n— 按批次分开报：批次条 —');
+{
+  const rows = [
+    { '序号': 1, '状态': '未报销', '凭证类型': '发票', '价税合计': '942.54', '报销批次': '太仓批', '开票日期': '2026-07-23', '出行人': '孙振强' },
+    { '序号': 2, '状态': '未报销', '凭证类型': '火车票', '价税合计': '456.00', '报销批次': '太仓批', '开票日期': '2026-08-05', '出行人': '孙振强' },
+    { '序号': 3, '状态': '未报销', '凭证类型': '发票', '价税合计': '204.00', '报销批次': '', '开票日期': '2026-06-01', '出行人': '' },
+  ];
+  box.state.rows = rows;
+  box.state.attachSeqs = new Set();
+  box.state.sel = new Set();
+  box.state.filter = { status: '', ctype: '', category: '', batch: '', person: '',
+                       month: '', min: '', max: '', kw: '' };
+  box.state.byBatch = [
+    { batch: '太仓批', n: 2, n_attach: 0, sum: 1398.54, pending: 2, done: 0,
+      first: '2026-07-23', last: '2026-08-05', persons: ['孙振强'] },
+    { batch: '', n: 1, n_attach: 0, sum: 204, pending: 1, done: 0,
+      first: '2026-06-01', last: '2026-06-01', persons: [] },
+  ];
+  box.renderBatchBar();
+  const bar = els['batch-bar'];
+  chk(bar.hidden === false, '两个批次 → 批次条显示出来');
+  chk(/太仓批/.test(bar.innerHTML), '批次条里有「太仓批」');
+  chk(/未填批次/.test(bar.innerHTML), '空批次名显示成「未填批次」（不然一片空白看不懂）');
+  chk(/1,398\.54/.test(bar.innerHTML), '批次条里给的是这一批的计费金额 1,398.54');
+  chk(/data-act="sel"/.test(bar.innerHTML), '每一批都有「全选这批」按钮（可以单独拿它出单）');
+  chk(/按批次分开报/.test(bar.innerHTML), '有条标题说明这块是干什么的');
+  chk(/数据来源/.test('数据来源') && /共 2 批/.test(bar.innerHTML), '总览写着「共 N 批」');
+
+  // 只有一个批次、又没按批次筛 → 藏起来，不白占一块版面
+  box.state.byBatch = [box.state.byBatch[0]];
+  box.renderBatchBar();
+  chk(els['batch-bar'].hidden === true, '只有一个批次时不显示这条（省版面）');
+}
+
+console.log('\n— 「全选这批」只勾这一批 —');
+{
+  box.state.rows = [
+    { '序号': 1, '状态': '未报销', '凭证类型': '发票', '价税合计': '942.54', '报销批次': '太仓批', '出行人': '孙振强' },
+    { '序号': 2, '状态': '未报销', '凭证类型': '火车票', '价税合计': '456.00', '报销批次': '太仓批', '出行人': '孙振强' },
+    { '序号': 3, '状态': '未报销', '凭证类型': '发票', '价税合计': '204.00', '报销批次': '', '出行人': '' },
+  ];
+  box.state.sel = new Set();
+  box.state.attachSeqs = new Set();
+  box.onBatchBarClick({ target: { closest: () => ({ dataset: { act: 'sel', batch: '太仓批' } }) } });
+  chk(box.state.sel.has('1') && box.state.sel.has('2'), '「全选这批」把太仓批两张都勾上');
+  chk(!box.state.sel.has('3'), '没勾到另一批（两批分开报，勾错就混账了）');
+}
+
+console.log('\n— 合计口径：附件不重复计钱 —');
+{
+  box.state.rows = [
+    { '序号': 11, '状态': '未报销', '凭证类型': '发票', '价税合计': '76.10', '报销批次': '烟台批', '开票日期': '2026-06-01', '出行人': '郑玉杰' },
+    { '序号': 12, '状态': '未报销', '凭证类型': '打车行程单', '价税合计': '76.10', '报销批次': '烟台批', '开票日期': '2026-06-01', '出行人': '郑玉杰' },
+  ];
+  box.state.attachLinks = { '12': { main_seq: '11', main_amount: 76.1, main_desc: '打车票' } };
+  box.state.attachSeqs = new Set(['12']);
+  box.state.sel = new Set(['11', '12']);
+  chk(box.isAttach('12') === true, 'isAttach 认得出附件行');
+  chk(box.isAttach('11') === false, '主票不是附件');
+  chk(Math.abs(box.selectedSum() - 76.10) < 0.001,
+    '勾「发票 + 它的行程单」只算 76.10，不是 152.20（这就是「加了两遍打车」的根因）',
+    box.selectedSum());
+  box.renderLedgerBody();
+  const tbody = els['ledger-body'].innerHTML;
+  chk(/76\.10/.test(tbody), '台账表里两行都照常显示金额');
+  chk(!/152\.20/.test(tbody), '但「待报销」组的小计没有把附件算两遍');
+}
+
+console.log('\n— 票面姓名保护：批量填名字不许盖掉票面 —');
+{
+  box.askFaceOverwrite(
+    [{ seq: '25', name: '孙振强' }],
+    [{ seq: '25', face: '邵自杰', cur: '孙振强', new: '孙振强',
+       no: '26379116295002204819', detail: 'G2699 济南-太仓' }],
+    '孙振强');
+  const tt = els['modal-title'].textContent || '';
+  const h2 = els['modal-text'].innerHTML || '';
+  chk(/票面/.test(tt) && /保留/.test(tt), '弹层标题说明「票面姓名已保留」', tt);
+  chk(/邵自杰/.test(h2), '弹层里列出票面真正写的姓名（邵自杰）');
+  chk(/保持票面姓名/.test(els['modal-cancel'].textContent || ''),
+    '「取消」写成「保持票面姓名」—— 默认就是不覆盖');
+  chk(/覆盖这 1 张/.test(els['modal-ok'].textContent || ''),
+    '「确定」要明说「覆盖这 1 张」（不能只写「确定」，点下去会改错人）',
+    els['modal-ok'].textContent);
+  chk(/票面是可信来源/.test(h2), '写清楚了为什么拦（票面是可信来源）');
+}
+  });                            // 收掉上面那个 await …then 回调
 })().then(() => {
   console.log(fails ? `\n❌ ${fails} 项不通过` : '\n✅ 全部通过');
   process.exit(fails ? 1 : 0);
