@@ -60,6 +60,19 @@
       - ./票据:/票据               # ② 把你的票据文件夹挂到这里
 ```
 
+> ⚠️ **如果你的 compose 里是 `FB_PASSWORD: "${FB_PASSWORD}"` 这种写法**（NAS 图形界面「新建项目」
+> 常这么生成），那它只是个**占位符**，值要去**同一个目录的 `.env` 文件**取：
+>
+> ```bash
+> cd /volume1/docker/fapiao
+> printf 'FB_PASSWORD=你的新口令\n' > .env
+> docker compose up -d
+> docker compose config | grep -i FB_PASSWORD   # 确认解析出来不是空的
+> ```
+>
+> `.env` 里没这个变量时，compose 当**空字符串**处理 → 程序「口令为空 = 不用登录、谁都是管理员」。
+> 嫌麻烦就把那行直接改回字面值 `FB_PASSWORD: "你的口令"`，不用 `.env`。
+
 - **口令**：`FB_PASSWORD`。它一次干三件事：**第一次启动自动创建管理员账号时用的初始密码**、
   **管理员自己的备用登录方式**、以及没账号时的门槛。留空 = 谁打开都不用登录 ——
   只在完全可信的内网才这么干。第一次启动后登录页上是这样：
@@ -179,6 +192,7 @@ compose 里的 `TZ: "Asia/Shanghai"` 被改掉了，加回去重建。
 
 **忘了口令**
 改 `docker-compose.yml` 里的 `FB_PASSWORD`，然后 `docker compose up -d`（会重建容器，数据不动）。
+（如果那行写的是 `${FB_PASSWORD}` 占位符，就去改**同目录的 `.env`**，改完同样 `docker compose up -d`。）
 ⚠️ 这只影响「访问口令」这条路；各人账号的密码存在数据库里，不受它影响。
 要是**管理员账号的密码**也忘了：登录时**用户名留空、只填访问口令**就能进去，再在设置页改回来。
 

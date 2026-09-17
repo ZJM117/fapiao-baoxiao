@@ -96,6 +96,23 @@ services:
       - ./票据:/票据
 ```
 
+> **口令那行要不要写死？** 上面 `FB_PASSWORD: "change-me"` 是直接写字面值，最简单，推荐。
+> 如果你的 compose 里是被改成 `FB_PASSWORD: "${FB_PASSWORD}"` 这种写法（NAS 图形界面「新建项目」
+> 常常这么生成），那它就是个**占位符**，值要去**同一个目录下的 `.env` 文件**里找：
+>
+> ```bash
+> cd /volume1/docker/fapiao
+> printf 'FB_PASSWORD=你的新口令\n' > .env    # 必须是这个目录、这个文件名
+> docker compose up -d                          # 环境变量只在启动时读，要重建容器
+> ```
+>
+> ⚠️ **`.env` 里没写这个变量时，compose 会把它当空字符串** —— 而本程序「口令为空 = 不要登录，
+> 谁打开都是管理员」。部署完先确认一下：
+>
+> ```bash
+> docker compose config | grep -i FB_PASSWORD   # 看解析出来的实际值，别是空的
+> ```
+
 #### 3. 登录镜像仓库（私有镜像只需一次）
 
 ```bash
@@ -265,6 +282,7 @@ compose 里的 `TZ: "Asia/Shanghai"` 丢了，加回去重建容器。
 
 **忘了口令 / 忘了管理员密码**
 改 `docker-compose.yml` 里的 `FB_PASSWORD` 再 `docker compose up -d`（数据不动）。
+（那行若写成 `${FB_PASSWORD}` 占位符，就去改**同目录的 `.env`**。）
 ⚠️ 这只影响「访问口令」这条路；各人账号密码存在数据库里，不受影响。
 **管理员密码也忘了**：登录时**用户名留空、只填访问口令**就能进去，再在设置页改回来。
 
