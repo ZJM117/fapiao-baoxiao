@@ -41,19 +41,18 @@
  * ===================================================================== */
 'use strict';
 
+/* 主题表 —— 只留 4 套（2026-09-17 窄化）。
+   版式按「深空冷光 · Financial Dashboard」重构，配色体系随之收敛：
+   冷/暖 × 深/浅 各一套，够挑且不至于挑花眼。
+   ⚠️ id 必须与 style.css 里的 [data-theme="…"] 一一对应；
+      'light' 是默认外观（index.html 的 <html data-theme="light"> 静态写着），
+      也是 applyTheme() 找不到 id 时的兜底，不能改名。
+      'dark' 的变量就写在 style.css 的 :root 里（没有单独的 [data-theme="dark"] 块）。 */
 const THEMES = [
-  { id: 'dark',      name: '深色经典', bg: '#0b0f19', card: '#111820', accent: '#6cb6ff' },
-  { id: 'light',     name: '亮色清新', bg: '#f0f3f6', card: '#ffffff', accent: '#0969da' },
+  { id: 'light',     name: '亮色清新', bg: '#f2f5f9', card: '#ffffff', accent: '#0969da' },
+  { id: 'dark',      name: '深空冷光', bg: '#060d16', card: '#0b1622', accent: '#22d3ee' },
   { id: 'warm-gold', name: '暖阳金沙', bg: 'hsl(35,60%,96%)',  card: '#ffffff', accent: 'hsl(35,80%,55%)' },
   { id: 'tiffany',   name: '蒂芙尼蓝', bg: 'hsl(173,50%,96%)', card: '#ffffff', accent: 'hsl(173,70%,52%)' },
-  { id: 'twilight',  name: '霞光紫',   bg: 'hsl(270,50%,97%)', card: '#ffffff', accent: 'hsl(260,80%,68%)' },
-  { id: 'rosegold',  name: '金粉世家', bg: 'hsl(330,90%,98%)', card: '#ffffff', accent: 'hsl(330,80%,70%)' },
-  { id: 'forest',    name: '森林绿',   bg: 'hsl(150,40%,96%)', card: '#ffffff', accent: 'hsl(150,60%,42%)' },
-  { id: 'sakura',    name: '樱花粉',   bg: 'hsl(340,22%,96%)', card: '#ffffff', accent: 'hsl(340,65%,58%)' },
-  { id: 'arctic',    name: '北极蓝',   bg: 'hsl(210,25%,95%)', card: '#ffffff', accent: 'hsl(210,80%,55%)' },
-  { id: 'lime',      name: '青柠活力', bg: 'hsl(80,18%,95%)',  card: '#ffffff', accent: 'hsl(80,65%,40%)' },
-  { id: 'peach',     name: '蜜桃橙',   bg: 'hsl(25,55%,96%)',  card: '#ffffff', accent: 'hsl(25,80%,58%)' },
-  { id: 'coral',     name: '珊瑚红',   bg: 'hsl(355,45%,96%)', card: '#ffffff', accent: 'hsl(355,72%,55%)' },
 ];
 
 const LS = {
@@ -62,10 +61,27 @@ const LS = {
   kind: 'invoice-rp.kind',
   fmt: 'invoice-rp.fmt',
   lastSrc: 'invoice-rp.lastSrc',
-  alw: 'invoice-rp.alw',          // 差旅费补助那几行（自己填的，下次进来还在）
-  alwOn: 'invoice-rp.alwOn',
-  jyAlw: 'invoice-rp.jyAlw',      // 模板二版式：按人的补助金额 {姓名: 金额}
+  folds: 'invoice-rp.folds',      // 卡片折叠状态 {'page-set::目录信息': 1, ...}（1=收起）
+  guideSeen: 'invoice-rp.guideSeen', // 已经看过「使用说明」了（首访只自动弹一次，之后不再打扰）
 };
+
+/* ⚠️⚠️ 表单里「填的钱」一律不许进 localStorage（2026-09-17 修，用户报的 bug）
+ * ---------------------------------------------------------------------
+ * 这里原来有三个键：invoice-rp.alw（补助那几行）、invoice-rp.alwOn（补助的勾选）、
+ * invoice-rp.jyAlw（模板二按人的补助金额），理由写的是「下次进来不用重填」。
+ * 结果用户的第二次做单：啥也没填，补助和出差人员就自己填好了 —— 这些值会
+ * **跟着进单据**，也就是报销金额被算错。这不是省事，是算错钱。
+ * 所以三个键连同 load/save 函数一起删掉：打开页面永远是干净的。
+ * 要复用得靠用户自己按界面上的按钮（「+ 加一行」「预填到每人」「清空」）。
+ * 界面偏好（主题、折叠、上次选的单据类型）继续存 —— 那些不影响金额。 */
+
+/** 老版本把补助存进浏览器了，那些值还躺在用户机器上 —— 启动时清掉，
+ *  不然「残留信息」只是界面不显示、东西还在（用户换回旧版还会冒出来）。 */
+function purgeLegacyAllowanceKeys() {
+  ['invoice-rp.alw', 'invoice-rp.alwOn', 'invoice-rp.jyAlw'].forEach((k) => {
+    try { localStorage.removeItem(k); } catch (e) { /* 无痕模式等，忽略 */ }
+  });
+}
 
 const $ = (id) => document.getElementById(id);
 const api = () => (window.pywebview && window.pywebview.api) || null;
@@ -113,17 +129,19 @@ const state = {
   kind: localStorage.getItem(LS.kind) || '费用报销单',
   fmt: localStorage.getItem(LS.fmt) || 'pdf',      // 报销单输出格式 pdf / xlsx / both
   // 差旅费补助（用户要求：「出差有差旅费啊，要计算几个人几天，多少钱，可以我自己填」）
-  alw: loadAlw(),                // [{name, people, days, rate, amount, manual}]
-  alwOn: localStorage.getItem(LS.alwOn) === '1',
-  alwOff: localStorage.getItem(LS.alwOn) === '0',  // 手动关掉过 → 换单据类型别自动开回来
+  // 从空开始，不记上次填的值（原因见上面 LS 那段：记了会让下一张单据的钱算错）
+  alw: [],                       // [{name, people, days, rate, amount, manual}]
+  alwOn: false,                  // 「计入差旅费补助」勾没勾
+  alwOff: false,                 // 本次会话里手动关掉过 → 换单据类型别自动开回来
   // 模板二版式：出差补助按人填（{姓名: 金额}）；票据合计由后端按出行人算（附件不重复计）
-  jyAlw: loadJyAlw(),
+  jyAlw: {},
   jyPeople: [],                  // [{name, bills}] 后端 report_persons 给的
   jyTotal: 0,
   attachLinks: {},               // {附件序号: {main_seq, main_amount}} —— 台账里标「↳ 附件」
   outputs: [],                   // 生成过的文件（来自后端 输出/生成记录.json）
   filter: { status: '', ctype: '', category: '', batch: '', person: '',
             month: '', min: '', max: '', kw: '' },
+  view: 'all',                     // 作业条上的视图胶囊：all / risk —— 其余两档直接用状态筛选
   aggregates: null,
   aggScope: '全部',
   cfg: null,
@@ -135,7 +153,7 @@ const state = {
  * 主题
  * ===================================================================== */
 function applyTheme(id) {
-  if (!THEMES.some((t) => t.id === id)) id = 'dark';
+  if (!THEMES.some((t) => t.id === id)) id = 'light';
   document.documentElement.setAttribute('data-theme', id);
   localStorage.setItem(LS.theme, id);
   document.querySelectorAll('.theme-card').forEach((el) =>
@@ -174,6 +192,128 @@ function initThemePop() {
 }
 
 /* =====================================================================
+ * 卡片折叠
+ * ---------------------------------------------------------------------
+ * 用户原话：「全都展开太多了，弄成可折叠的」。所以：
+ *   · 每张卡的**卡头整条**都能点（右侧一个小三角），比让人去抠那个三角好点得多
+ *   · 默认收起的卡在 index.html 里写 data-fold="closed"，其余默认展开
+ *   · 用户手动改过的状态记在 localStorage，下次进来按他的来（不再被默认值覆盖）
+ *   · 出单区（出报销单 / 合并发票）是**整组**折叠：三个卡片一起收，
+ *     勾完凭证点「生成报销单 ↓」时由 focusWorkPanel() 自动展开
+ *
+ * ⚠️ 折叠靠 `.card.collapsed > *:not(.card-head) { display:none }` 藏正文 ——
+ *    **不额外包一层 DOM**：包一层会动到所有卡片的结构，DOM 桩测试和
+ *    回归断言都得跟着重写，而这一轮的收益只有「好看一点」，不划算。
+ * ===================================================================== */
+function readFolds() {
+  try {
+    const raw = localStorage.getItem(LS.folds);
+    const obj = raw ? JSON.parse(raw) : {};
+    return (obj && typeof obj === 'object') ? obj : {};
+  } catch (e) { return {}; }          // 存坏了 / 隐私模式：当没存过，别让界面起不来
+}
+
+function saveFold(key, closed) {
+  if (!key) return;
+  try {
+    const m = readFolds();
+    m[key] = closed ? 1 : 0;
+    localStorage.setItem(LS.folds, JSON.stringify(m));
+  } catch (e) { /* 写不了就算了，只是记不住，不影响折叠本身 */ }
+}
+
+/** 折叠键＝「哪个页面 + 卡标题」。用标题而不是序号：卡片增删前后，状态还能对上。 */
+function foldKeyOf(card) {
+  const t = card.querySelector('.card-title');
+  const page = card.closest ? card.closest('.page') : null;
+  return `${page ? page.id : 'global'}::${t ? t.textContent.trim() : 'untitled'}`;
+}
+
+function setFold(card, closed) {
+  card.classList.toggle('collapsed', closed);
+  const head = card.querySelector('.card-head');
+  if (head) head.setAttribute('aria-expanded', closed ? 'false' : 'true');
+}
+
+function toggleFold(card) {
+  const closed = !card.classList.contains('collapsed');
+  setFold(card, closed);
+  saveFold(card.dataset.foldKey, closed);
+}
+
+/* ---------- 出单区：整组折叠 ---------- */
+function setFoldGroup(g, closed) {
+  if (!g) return;
+  g.classList.toggle('collapsed', closed);
+  const head = $('work-panel-head');
+  if (head) head.setAttribute('aria-expanded', closed ? 'false' : 'true');
+  const hint = $('work-panel-hint');
+  if (hint) {
+    hint.textContent = closed
+      ? '点这里展开 —— 上面勾好的凭证在下面第一张表里；填完参数点生成，PDF 与 Excel 随便挑'
+      : '填完参数点生成，PDF 与 Excel 随便挑；勾选改了要重新生成一次';
+  }
+}
+
+/** 展开出单区（不写 localStorage：它是「跟着操作自动打开」，不是用户的选择） */
+function openWorkPanel() {
+  setFoldGroup($('work-panel'), false);
+}
+
+/** 展开「入库结果」那张卡。它默认收着（空的时候挂着也是白占地方），
+ *  一有结果（哪怕是失败 / 没找到）就自动打开 —— 那种时候正是要看的。
+ *  同样**不写** localStorage：这是「跟着操作打开」，下次进来该收还是收。 */
+function openImportResult() {
+  const holder = $('in-stats');
+  const card = holder && holder.closest && holder.closest('.card');
+  if (card) setFold(card, false);
+}
+
+/** 把当前页面所有卡片套上折叠状态。动态生成的卡（统计页）渲染完要再调一次。 */
+function applyFolds(root) {
+  const saved = readFolds();
+  const scope = root || document;
+  scope.querySelectorAll('.card').forEach((card) => {
+    // 必须有卡头 + 标题才给折 —— 没有卡头就没地方点，折了就再也打不开
+    if (!card.querySelector('.card-title') || !card.querySelector('.card-head')) return;
+    if (!card.dataset.foldKey) card.dataset.foldKey = foldKeyOf(card);
+    const k = card.dataset.foldKey;
+    setFold(card, (k in saved) ? !!saved[k] : card.dataset.fold === 'closed');
+  });
+  const g = $('work-panel');
+  if (g) {
+    if (!g.dataset.foldKey) g.dataset.foldKey = 'work-panel';
+    setFoldGroup(g, (g.dataset.foldKey in saved)
+      ? !!saved[g.dataset.foldKey]
+      : g.dataset.fold === 'closed');
+  }
+}
+
+function initFolds() {
+  // 委托：卡片是动态生成的（统计页、入库结果），一个个挂监听会漏
+  document.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t || !t.closest) return;
+
+    // ⚠️ 出单区那把手的**本身就是 <button>**，必须先认它 ——
+    //    放到下面「点按钮不折叠」那条后面，就会被那条先吃掉，点了没反应。
+    if (t.closest('#work-panel-head')) {
+      const g = $('work-panel');
+      const closed = !g.classList.contains('collapsed');
+      setFoldGroup(g, closed);
+      saveFold(g.dataset.foldKey, closed);
+      return;
+    }
+
+    // 卡头里将来若放了按钮 / 输入框，点它不该顺手把整张卡折了
+    if (t.closest('input, select, button, a')) return;
+    const head = t.closest('.card > .card-head');
+    if (head && head.parentElement) toggleFold(head.parentElement);
+  });
+  applyFolds();
+}
+
+/* =====================================================================
  * 侧边栏 / 页面切换
  * ===================================================================== */
 function switchPage(pageId) {
@@ -188,10 +328,11 @@ function switchPage(pageId) {
 }
 
 function onPageEnter(pageId) {
-  if (pageId === 'page-ledger') loadLedger();
+  // 「报销作业」是台账 + 出单合并页，进来两样都要备好
+  if (pageId === 'page-ledger') { loadLedger(); if (!state.outputs.length) loadOutputs(); }
   else if (pageId === 'page-stats') loadStats();
   else if (pageId === 'page-set') { loadConfigIntoForm(); loadPhoneMap(); loadSettingsExtras(); }
-  else if (pageId === 'page-report') loadOutputs();
+  else if (pageId === 'page-jobs') { renderJobs(); refreshJobsBadge(); }
 }
 
 function setSidebarCollapsed(collapsed) {
@@ -313,11 +454,14 @@ function showModal(o) {
   $('modal-ok').textContent = o.okText || '确定';
   $('modal-ok').style.display = o.noOk ? 'none' : '';
   $('modal-cancel').textContent = o.cancelText || '取消';
-  // 明细这类内容多的弹层要更宽一点（.modal-lg / .modal-xl 在 extra.css 里）
+  // 说明书这种「只要一个知道了」的弹层，把「取消」藏掉（不然两个按钮都等于关，用户会犹豫）
+  $('modal-cancel').style.display = o.noCancel ? 'none' : '';
+  // 明细这类内容多的弹层要更宽一点（.modal-lg / .modal-xl / .modal-doc 在 extra.css 里）
   const m = document.querySelector('#overlay .modal');
   if (m) {
     m.classList.toggle('modal-lg', !!o.wide);
     m.classList.toggle('modal-xl', !!o.xwide);
+    m.classList.toggle('modal-doc', !!o.doc);
   }
   modalOk = o.onOk || null;
   $('overlay').classList.add('show');
@@ -360,6 +504,15 @@ function initImportPage() {
     localStorage.setItem(LS.lastSrc, state.src);
     hideSrcOrigin();          // 手动改了路径，那条「本机文件夹 → NAS」的来源就不再成立了
     checkSource();
+  });
+
+  // 路径框限了宽，长路径会被省略号截掉 —— 悬停时把完整路径挂到 title 上。
+  // ⚠️ 故意在 mouseenter 时才读 value，而不是在每一处赋值后同步一遍：
+  //    赋值点有 5 处（选择文件夹 / 恢复默认 / 上传落点 / boot 回填…），
+  //    漏一处就会出现「框里显示一条、悬停显示另一条」。这里读的永远是当前值。
+  $('src-path').addEventListener('mouseenter', () => {
+    const v = $('src-path').value.trim();
+    $('src-path').title = v || '';
   });
 
   $('btn-pick').addEventListener('click', async () => {
@@ -714,6 +867,9 @@ function onImportResult(res, silent) {
   $('dup-wrap').style.display = 'none';
 
   if (!res) return;
+  // 有结果（哪怕失败 / 没找到）就把「入库结果」卡展开 —— 它平时是收着的，
+  // 那种时候正是要看的；res 为空是「清空显示」，不该顺手把它撑开。
+  openImportResult();
   if (res.error) {
     setStatus('入库失败', 'err');
     $('in-hint').textContent = '入库失败';
@@ -806,6 +962,36 @@ function filterSummary(f) {
   return parts.length ? '当前条件 — ' + parts.join('　·　') : '当前条件 — 全部（未加任何筛选）';
 }
 
+/**
+ * 这一行「有没有风险」——票面红字（退票费 / 改签差价，不是车票钱）或者重复报销提醒。
+ * 视图胶囊「有风险」就是靠它过滤的。
+ */
+function hasRisk(r) {
+  const tip = String(r['提示'] || '');
+  return !!String(r['票面标记'] || '').trim() || tip.includes('重复') || tip.includes('红字');
+}
+
+/** 视图胶囊 → 实际查询条件。待报销/已报销真的改状态筛选；「有风险」在返回结果上过一遍 */
+function setView(v) {
+  state.view = (v === 'risk') ? 'risk' : 'all';
+  const st = $('f-status');
+  if (st) st.value = v === 'todo' ? '未报销' : v === 'done' ? '已报销' : '';
+  syncViewPills(v);
+  loadLedger();
+}
+
+/** 胶囊高亮跟着真实筛选条件走，不自己记状态（免得「显示 A 却按 B 干活」） */
+function syncViewPills(hint) {
+  const st = (($('f-status') || {}).value || '');
+  let cur = 'all';
+  if (state.view === 'risk') cur = 'risk';
+  else if (st === '未报销') cur = 'todo';
+  else if (st === '已报销') cur = 'done';
+  if (hint && hint !== cur) cur = hint;
+  document.querySelectorAll('#view-pills .pill').forEach((p) =>
+    p.classList.toggle('active', p.dataset.view === cur));
+}
+
 function fillSelect(id, values, current, allLabel) {
   const sel = $(id);
   const prev = current !== undefined ? current : sel.value;
@@ -822,8 +1008,25 @@ function initLedgerPage() {
     ['f-status', 'f-ctype', 'f-category', 'f-batch', 'f-person', 'f-month',
      'f-min', 'f-max', 'f-kw'].forEach((id) => { if ($(id)) $(id).value = ''; });
     state.sel.clear();
+    state.view = 'all';
+    syncViewPills('all');
     loadLedger();
   });
+
+  // 视图胶囊：把最常用的四种「看台账的角度」摆在面上
+  $('view-pills').addEventListener('click', (e) => {
+    const p = e.target.closest('.pill');
+    if (p) setView(p.dataset.view);
+  });
+  // 高级筛选默认收起——9 个条件铺一整行，第一屏就全是控件了
+  $('btn-adv').addEventListener('click', () => {
+    const panel = $('adv-filter');
+    const willOpen = panel.hidden;
+    panel.hidden = !willOpen;
+    $('btn-adv').setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    $('btn-adv').classList.toggle('open', willOpen);
+  });
+
   // 下拉改动即查；文本类（关键词 / 金额）回车或点「查询」再查
   ['f-status', 'f-ctype', 'f-category', 'f-batch', 'f-person', 'f-month'].forEach((id) =>
     $(id).addEventListener('change', () => loadLedger()));
@@ -1005,7 +1208,7 @@ async function loadLedger() {
     state.rows = [];
     state.attachLinks = {};
     $('ledger-body').innerHTML =
-      `<tr><td colspan="13" class="empty">读取台账失败：${esc(r.error)}<br>
+      `<tr><td colspan="7" class="empty">读取台账失败：${esc(r.error)}<br>
        （如果 Excel 正开着这个文件，请先关掉）</td></tr>`;
     hint.textContent = '读取失败';
     return;
@@ -1015,6 +1218,19 @@ async function loadLedger() {
   state.aggregates = r.aggregates || null;
   // 后端已经把「打车行程单」挪到它对应发票的紧后面，并告诉我们哪几行是附件
   state.attachLinks = r.attach_links || {};
+
+  /* 「有风险」视图：票面红字（退票费/改签差价）或重复报销提醒。
+     后端没有这个筛选项，所以在**整份命中结果**上过滤（get_ledger 一次返回全部，没有分页）。 */
+  let stat = r;
+  if (state.view === 'risk') {
+    state.rows = state.rows.filter(hasRisk);
+    const pend = state.rows.filter((x) => x['状态'] !== '已报销');
+    const sum = (arr) => arr.reduce((a, x) => a + (num(x['价税合计']) || 0), 0);
+    stat = Object.assign({}, r, {
+      total: state.rows.length, sum: sum(state.rows),
+      pending_count: pend.length, pending_sum: sum(pend),
+    });
+  }
 
   // 保留还存在的勾选
   const alive = new Set(state.rows.map((x) => String(x['序号'])));
@@ -1033,13 +1249,17 @@ async function loadLedger() {
     const hit = r.total === r.all_count
       ? `命中 <b>${r.total}</b> 条（全部）`
       : `命中 <b>${r.total}</b> 条 / 全部 ${r.all_count} 条`;
-    sum.innerHTML = `${esc(filterSummary(state.filter))}　—　${hit}，合计 ${money(r.sum)}`;
+    const riskNote = state.view === 'risk'
+      ? `　—　已按「有风险」筛出 <b>${state.rows.length}</b> 张（红字 / 重复报销）`
+      : '';
+    sum.innerHTML = `${esc(filterSummary(state.filter))}　—　${hit}，合计 ${money(r.sum)}${riskNote}`;
   }
 
   renderLedgerBody();
-  renderLedgerStats(r);
+  renderLedgerStats(stat);
   syncSelectionUI();
   syncTvBadge(r.tv_todo);          // 「出行人核对」按钮上那个角标
+  syncViewPills();                 // 胶囊高亮跟着真实条件走
 }
 
 /** 「出行人核对」按钮上挂个数字：还有几张的出行人没认出来 / 没人工核对过 */
@@ -1053,8 +1273,8 @@ function syncTvBadge(n) {
 
 function renderLedgerStats(r) {
   const boxes = [
-    ['本页张数', r.total, 'accent'],
-    ['本页金额', money(r.sum), ''],
+    ['命中张数', r.total, 'accent'],
+    ['命中金额', money(r.sum), ''],
     ['待报销', `${r.pending_count} 张`, 'warn'],
     ['待报销金额', money(r.pending_sum), 'ok'],
     ['台账合计', `${r.all_count} 行`, 'mute'],
@@ -1107,48 +1327,68 @@ function stampTag(s) {
 function renderLedgerBody() {
   const body = $('ledger-body');
   if (!state.rows.length) {
-    body.innerHTML = `<tr><td colspan="13" class="empty">
-      没有符合条件的凭证。<br>先去「凭证入库」建账，或把上面的筛选条件清空。</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7" class="empty">
+      没有符合条件的凭证。<br>先去「凭证入库」建账，或把上面的条件清空。</td></tr>`;
     return;
   }
-  body.innerHTML = state.rows.map((r) => {
+
+  const rowHtml = (r) => {
     const seq = String(r['序号']);
     const done = r['状态'] === '已报销';
     const tip = String(r['提示'] || '');
-    const tags = [];
-    if (done) tags.push('<span class="tag tag-ok">已报销</span>');
-    else tags.push('<span class="tag tag-mute">未报销</span>');
+    const tags = [done ? '<span class="tag tag-ok">已报销</span>'
+                       : '<span class="tag tag-mute">未报销</span>'];
     if (tip.includes('重复')) tags.push('<span class="tag tag-dup">重复</span>');
     if (tip.includes('红字')) tags.push('<span class="tag tag-pending">红字</span>');
-    const seller = r['销方名称'] || '';
-    const proj = r['项目/事由'] || '';
+
+    const proj = String(r['项目/事由'] || '').trim();
     const trip = String(r['行程/明细'] || '').trim();
-    const no = String(r['发票号码'] || '').trim();
+    const seller = String(r['销方名称'] || '').trim();
     const tvName = String(r['出行人'] || '').trim();
     // 是「跟在发票后面的附件」吗（后端算出的一对一配对）
     const lk = state.attachLinks[seq];
     const rowTip = lk
       ? `是第 ${lk.main_seq} 号发票（${money(lk.main_amount)}）的证明附件，排在它后面；点这一行看全部信息`
       : '点这一行看凭证全部信息';
+
+    /* 「事项 / 行程」一格里放两行：主行是项目·事由（没项目就用行程明细顶上），
+       副行是行程明细 / 销方 —— 省掉两整列的宽度，信息一条没少 */
+    const mainText = proj || trip || seller;
+    const mainLine = mainText ? esc(mainText) : '<span class="td-dash">—</span>';
+    const subs = [];
+    if (proj && trip) subs.push(trip);
+    if (mainText && seller && seller !== mainText) subs.push(seller);
+    const subLine = subs.length
+      ? `<div class="td-sub" title="${esc(subs.join(' · '))}">${esc(subs.join(' · '))}</div>`
+      : '';
+
     return `
       <tr data-seq="${seq}" class="${done ? 'row-done' : ''}${lk ? ' row-att' : ''}" title="${esc(rowTip)}">
         <td class="td-c"><input type="checkbox" data-seq="${seq}"${state.sel.has(seq) ? ' checked' : ''}></td>
-        <td class="td-idx">${lk ? '<span class="att-mark" title="发票的附件">↳</span>' : ''}${pad2(seq)}</td>
-        <td>${tags.join('')}</td>
+        <td class="td-nowrap">${lk ? '<span class="att-mark" title="发票的附件">↳</span>' : ''}<span class="row-no">${pad2(seq)}</span>${tags.join('')}</td>
+        <td class="td-time">${esc(r['开票日期'])}</td>
         <td class="td-nowrap">${ctypeBadge(r['凭证类型'])}${stampTag(r['票面标记'])}${lk ? '<span class="tag tag-att">附件</span>' : ''}</td>
+        <td class="td-main">${mainLine}${subLine}</td>
         <td class="td-nowrap td-c" title="${tvName ? esc('出行人：' + tvName) : '票面上没有人名（打车行程单常见），选中这行点「设置出行人」手填'}">${tvName
           ? esc(tvName)
           : '<span class="td-dash">—</span>'}</td>
-        <td class="td-time">${esc(r['开票日期'])}</td>
-        <td class="td-no">${no ? esc(no) : '<span class="td-dash">—</span>'}</td>
-        <td class="td-trip" title="${esc(trip)}">${trip ? esc(trip) : '<span class="td-dash">—</span>'}</td>
-        <td class="td-proj" title="${esc(seller)}">${esc(seller)}</td>
-        <td class="td-proj" title="${esc(proj)}">${esc(proj)}</td>
-        <td class="td-c td-nowrap">${esc(r['费用类别'])}</td>
         <td class="td-r">${money2(r['价税合计'])}</td>
-        <td class="td-time">${esc(r['报销批次'])}</td>
       </tr>`;
-  }).join('');
+  };
+
+  /* 按状态分组：待报销是「还要干的活」，排前面；已报销是存档，排后面。
+     分组头上是这一组的张数和金额——这一眼比一排筛选条件有用得多。 */
+  const pending = state.rows.filter((r) => r['状态'] !== '已报销');
+  const done = state.rows.filter((r) => r['状态'] === '已报销');
+  const sumOf = (arr) => arr.reduce((a, r) => a + (num(r['价税合计']) || 0), 0);
+  const group = (label, arr, cls) => arr.length
+    ? `<tr class="grp-row ${cls}"><td colspan="7">
+         <span class="grp-lab">${label}</span>
+         <span class="grp-meta">${arr.length} 张 · ${money(sumOf(arr))}</span></td></tr>`
+      + arr.map(rowHtml).join('')
+    : '';
+
+  body.innerHTML = group('待报销', pending, 'grp-todo') + group('已报销', done, 'grp-done');
 }
 
 /* =====================================================================
@@ -1627,7 +1867,7 @@ function syncKindPills() {
   const isJy = state.kind === JY_KIND;
   $('trip-row').style.display = isTrip ? '' : 'none';
   // 两块补助是二选一的：模板二用「按人」，另外两种用「人数×天数×标准」
-  const alwBlock = document.querySelector('#page-report .alw-block:not(#jy-block)');
+  const alwBlock = document.querySelector('#work-panel .alw-block:not(#jy-block)');
   if (alwBlock) alwBlock.hidden = isJy;
   const jyBlock = $('jy-block');
   if (jyBlock) jyBlock.hidden = !isJy;
@@ -1635,7 +1875,6 @@ function syncKindPills() {
   if (isTrip && !state.alwOn && !state.alwOff) {
     state.alwOn = true;
     if (!state.alw.length) state.alw = [newAlwRow()];
-    saveAlw();
   }
   renderAlw();
   if (isJy) {
@@ -1705,18 +1944,28 @@ async function loadOutputs() {
 
 function goToReport() {
   const rows = state.rows.filter((r) => state.sel.has(String(r['序号'])));
-  if (!rows.length) { toast('先在台账里勾选要报销的发票', 'warn'); return; }
+  if (!rows.length) { toast('先在列表里勾选要报销的发票', 'warn'); return; }
   state.selRows = rows;
   renderReportRows();
-  switchPage('page-report');
+  focusWorkPanel();                  // 同一页里往下滚，不再跳页
   refreshJyPeople();                 // 模板二版式要用：按出行人的票据合计（其他类型里它是空转）
+}
+
+/** 勾完凭证把视线带到下面的「出单区」——先展开（默认是收着的）、再滚过去 + 闪一下 */
+function focusWorkPanel() {
+  const panel = $('work-panel');
+  if (!panel) return;
+  openWorkPanel();
+  try { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { /* 老内核忽略 */ }
+  panel.classList.add('flash');
+  setTimeout(() => panel.classList.remove('flash'), 900);
 }
 
 function renderReportRows() {
   const rows = state.selRows;
   const body = $('rep-body');
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="7" class="empty">还没有选凭证 —— 去「凭证台账」勾选后点「生成报销单 →」</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" class="empty">还没有选凭证 —— 在上面列表里勾选后点「生成报销单 ↓」</td></tr>';
     $('rep-total').innerHTML = '';
     $('rep-hint').textContent = '未选中';
     return;
@@ -1765,23 +2014,21 @@ function renderReportRows() {
  * 要计算几个人几天，多少钱，可以我自己设置这个，我自己填写」。
  * 所以这里给一张小表，一行一个补助项目，金额 = 人数 × 天数 × 标准；
  * 界面上实时算给你看，也可以直接改金额（改过就按你填的算，不再自动覆盖）。
- * 这几行存在 localStorage 里，下次进来不用重填。
+ * ⚠️ 这几行**不存 localStorage**：补助属于「这一次」报销，记住上次的值
+ *    等于第二张单的钱自己就填好了（用户 2026-09-17 报的正是这个）。归零有三条路：
+ *      · 打开页面 → 本来就是空的
+ *      · 生成报销单成功 → 自动归零（resetAllowances）
+ *      · 界面上的「清空」按钮 → 手动全清
  * ===================================================================== */
 const ALW_DEFAULT_NAME = '伙食补助费';
 
-function loadAlw() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(LS.alw) || '[]');
-    return Array.isArray(raw) ? raw : [];
-  } catch (e) {
-    return [];
-  }
-}
-function saveAlw() {
-  try {
-    localStorage.setItem(LS.alw, JSON.stringify(state.alw));
-    localStorage.setItem(LS.alwOn, state.alwOn ? '1' : '0');
-  } catch (e) { /* 隐私模式下存不了，不影响使用 */ }
+/** 全清：行清掉、勾选也取消（用户手动按「清空」时用） */
+function clearAlw() {
+  state.alw = [];
+  state.alwOn = false;
+  const on = $('r-alw-on');
+  if (on) on.checked = false;
+  renderAlw();
 }
 /** 输入框里的数字（空 / 乱填都当 0） */
 function alwNumber(v) {
@@ -1821,8 +2068,17 @@ function newAlwRow(seed) {
 function addAlwRow(seed) {
   if (!state.alw.length || !state.alwOn) state.alw = [newAlwRow(seed)];
   else state.alw.push(newAlwRow({ name: '' }));
-  saveAlw();
   renderAlw();
+}
+/** 生成报销单成功后调用：两块补助一起归零 —— 值不能流到下一张单。
+ *  勾选状态保留（差旅费那档不用重新勾一次），只是金额回到 0。 */
+function resetAllowances() {
+  state.alw = state.alwOn ? [newAlwRow()] : [];
+  state.jyAlw = {};
+  const d = $('jy-days'); if (d) d.value = '';
+  const r = $('jy-rate'); if (r) r.value = '';
+  renderAlw();
+  renderJy();
 }
 function alwPayload() {
   if (!state.alwOn) return [];
@@ -1875,12 +2131,16 @@ function initAlw() {
       state.alwOn = on.checked;
       state.alwOff = !on.checked;
       if (state.alwOn && !state.alw.length) state.alw = [newAlwRow()];
-      saveAlw();
       renderAlw();
     });
   }
   const add = $('btn-alw-add');
   if (add) add.addEventListener('click', () => addAlwRow());
+  const clr = $('btn-alw-clear');
+  if (clr) clr.addEventListener('click', () => {
+    clearAlw();
+    toast('补助已清空（重新填就是这一单的）', 'ok');
+  });
   const body = $('alw-body');
   if (body) {
     body.addEventListener('input', (e) => {
@@ -1896,7 +2156,6 @@ function initAlw() {
         r[k] = inp.value;
         if (k !== 'name') r.manual = false;          // 改人数/天数/标准 → 回到自动算
       }
-      saveAlw();
       // 只重算显示，不重建整张表（否则输入框会失焦）
       const idx = Number(inp.dataset.i);
       const amtInp = body.querySelector(`input[data-k="amount"][data-i="${idx}"]`);
@@ -1909,7 +2168,6 @@ function initAlw() {
       const btn = e.target.closest('button[data-act="alw-del"]');
       if (!btn) return;
       state.alw.splice(Number(btn.dataset.i), 1);
-      saveAlw();
       renderAlw();
     });
   }
@@ -1922,24 +2180,25 @@ function initAlw() {
  * ===================================================================== */
 const JY_KIND = '模板二';
 
-function loadJyAlw() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(LS.jyAlw) || '{}');
-    return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  } catch (e) {
-    return {};
-  }
+/** 清掉「按人」的补助金额（不动名单 —— 名单是跟着勾选的凭证来的） */
+function clearJy() {
+  state.jyAlw = {};
+  renderJy();
 }
-function saveJyAlw() {
-  try {
-    localStorage.setItem(LS.jyAlw, JSON.stringify(state.jyAlw || {}));
-  } catch (e) { /* 隐私模式下存不了，不影响使用 */ }
-}
-/** 名单 = 后端算出来的人 + 已经填过补助但名单里还没有的人（顺序：先后端给的） */
-function jyNames() {
-  const names = (state.jyPeople || []).map((p) => p.name);
+/** 名单变了就把不在名单里的金额丢掉 —— 否则取消勾选的人还挂着他填过的补助 */
+function pruneJyAlw() {
+  const keep = jyNames();
   Object.keys(state.jyAlw || {}).forEach((n) => {
-    if (n && names.indexOf(n) < 0 && num(state.jyAlw[n])) names.push(n);
+    if (keep.indexOf(n) < 0) delete state.jyAlw[n];
+  });
+}
+/** 名单 = **本次勾选的凭证**里的出行人（后端 report_persons 给的）。
+ *  ⚠️ 不再从「以前填过补助的名字」里补人（2026-09-17 修）：那样上次的出差人员
+ *     会自己冒出来 —— 用户看到的就是「我啥也没填，出差人员已经填好了」。 */
+function jyNames() {
+  const names = [];
+  (state.jyPeople || []).forEach((p) => {
+    if (p && p.name && names.indexOf(p.name) < 0) names.push(p.name);
   });
   return names;
 }
@@ -1988,11 +2247,12 @@ function renderJy() {
 async function refreshJyPeople() {
   if (state.kind !== JY_KIND) return;
   const seqs = (state.selRows || []).map((r) => r['序号']);
-  if (!seqs.length) { state.jyPeople = []; state.jyTotal = 0; renderJy(); return; }
+  if (!seqs.length) { state.jyPeople = []; state.jyTotal = 0; state.jyAlw = {}; renderJy(); return; }
   const r = await call('report_persons', seqs);
   if (!r || r.error) { renderJy(); return; }
   state.jyPeople = r.people || [];
   state.jyTotal = num(r.total);
+  pruneJyAlw();                      // 名单里没有的人，把他的补助金额丢掉
   renderJy();
 }
 /** 一键按「天数 × 元/人·天」预填到每个人（省得一张一张打） */
@@ -2004,7 +2264,6 @@ function fillJyByDays() {
   const names = jyNames();
   if (!names.length) { toast('先去台账勾选凭证', 'warn'); return; }
   names.forEach((n) => { state.jyAlw[n] = amt; });
-  saveJyAlw();
   renderJy();
   toast(`已按 ${days} 天 × ${rate} 元/人·天 ＝ ${money(amt)} 预填到 ${names.length} 个人`, 'ok');
 }
@@ -2016,7 +2275,6 @@ function initJy() {
       if (!inp) return;
       const n = inp.dataset.name;
       state.jyAlw[n] = inp.value;
-      saveJyAlw();
       // 只刷这一行的「实际」和两个合计数，不重建整张表（否则输入框会失焦）
       const tr = inp.closest('tr');
       const real = tr && tr.querySelector('.jy-real');
@@ -2026,6 +2284,11 @@ function initJy() {
   }
   const btn = $('btn-jy-fill');
   if (btn) btn.addEventListener('click', fillJyByDays);
+  const clr = $('btn-jy-clear');
+  if (clr) clr.addEventListener('click', () => {
+    clearJy();
+    toast('补助金额已清零（名单还在，重新填就是这一单的）', 'ok');
+  });
 }
 
 function reportMeta() {
@@ -2075,6 +2338,9 @@ async function makeReport() {
   await loadOutputs();
   setStatus('报销单已生成', 'ok');
   toast(`已生成报销单（${fmtLabel}）：${r.count} 张，合计 ${money(r.sum)}`, 'ok');
+  // 补助已经进这一张单了 → 立刻归零。不然下次做单时这些钱「自己就填好了」，
+  // 会跟着进下一张单据（用户 2026-09-17 报的就是这个）。
+  resetAllowances();
   const extra = [];
   if (r.bill !== undefined && num(r.alw)) {
     const alwName = meta.kind === JY_KIND ? '出差补助' : '差旅费补助';
@@ -2099,7 +2365,11 @@ async function makeReport() {
       if (!rr) return;
       toast(`已把 ${rr.updated} 张标为已报销`, 'ok');
       state.selRows = [];
+      state.jyPeople = [];      // 这一批人的单已经出完了，名单别留在界面上
+      state.jyTotal = 0;
+      state.jyAlw = {};
       renderReportRows();
+      renderJy();
       loadLedger();
     },
   });
@@ -2237,6 +2507,7 @@ async function loadStats() {
     + `<div class="stat-box mute"><div class="sb-num" style="font-size:13px">${esc(state.aggScope)}</div>
        <div class="sb-lab">统计口径</div></div>`;
   renderAggTables(r.aggregates || {});
+  applyFolds($('st-tables'));       // 统计页这几张卡是刚生成的，得把折叠状态补套上
 }
 
 function renderAggTables(agg) {
@@ -2400,7 +2671,12 @@ async function poll() {
     const p = r.progress;
     setProgress(p.on, p.cur, p.total, p.label);
   }
-  if (r.busy !== undefined && r.busy !== state.busy) setImportBusy(r.busy);
+  if (r.busy !== undefined && r.busy !== state.busy) {
+    setImportBusy(r.busy);
+    // 忙→闲那一下最能说明结果（成功还是失败），顺手把任务页和角标刷一遍
+    if ($('page-jobs').classList.contains('active')) renderJobs();
+    refreshJobsBadge();
+  }
   // 结果按 result_id 去重；本次会话第一次拿到的（多半是刷新页面时带出来的旧结果）不弹提示
   if (r.result && r.result_id !== lastResultId) {
     lastResultId = r.result_id;
@@ -2472,6 +2748,142 @@ async function renderMe() {
   $('sb-user-name').textContent = meInfo.user || '未登录';
   $('sb-user-role').textContent = meInfo.role_cn || meInfo.role || '';
   box.title = `当前登录：${meInfo.user || ''}（${meInfo.role_cn || ''}）`;
+}
+
+/* =====================================================================
+ * 任务中心（P0-4）—— 谁在跑、跑到哪、失败的一点就能重来
+ * ===================================================================== */
+const JOB_CLS = { '运行中': 'run', '排队': 'queue', '成功': 'ok', '失败': 'err', '已取消': 'off' };
+
+function fmtSecs(s) {
+  const n = Math.max(0, Math.round(Number(s) || 0));
+  if (n < 60) return n + ' 秒';
+  const m = Math.floor(n / 60);
+  if (m < 60) return m + ' 分 ' + (n % 60) + ' 秒';
+  return Math.floor(m / 60) + ' 时 ' + (m % 60) + ' 分';
+}
+
+async function renderJobs() {
+  const r = await call('list_jobs', 50);
+  if (!r || r.error) {
+    $('job-stat').innerHTML = '';
+    $('job-list').innerHTML =
+      `<div class="card-hint" style="display:block">读不到任务列表：${esc((r && r.error) || '')}</div>`;
+    return;
+  }
+  const rows = r.rows || [];
+  const c = r.counts || {};
+
+  $('job-stat').innerHTML = [
+    ['运行中', c.running || 0, c.running ? 'run' : ''],
+    ['排队', c.queued || 0, ''],
+    ['今日成功', c.done_today || 0, 'ok'],
+    ['失败', c.failed || 0, c.failed ? 'err' : ''],
+  ].map(([k, v, cls]) =>
+    `<span class="job-chip ${cls}"><b>${v}</b>${esc(k)}</span>`).join('');
+
+  // ---- 正在执行 ----
+  const run = rows.filter((j) => j.state === '运行中' || j.state === '排队');
+  const rb = $('job-running-body');
+  if (!run.length) {
+    $('job-running-hint').textContent = '没有任务在跑';
+    rb.innerHTML = '<div class="card-hint" style="display:block">空闲。点「开始入库」或「生成报销单」的时候，这里会显示进度。</div>';
+  } else {
+    $('job-running-hint').textContent = `${run.length} 个在进行`;
+    rb.innerHTML = run.map((j) => {
+      const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+      return `<div class="job-run">
+        <div class="job-run-top">
+          <b>${esc(j.kind_cn || j.kind)}</b>
+          <span class="job-state ${JOB_CLS[j.state] || ''}">${esc(j.state)}</span>
+          <span class="usr-meta">${esc(j.username || '—')} · 起于 ${esc(j.started_at || j.created_at)}
+            · 已跑 ${fmtSecs(j.secs)}</span>
+        </div>
+        <div class="job-bar"><i style="width:${pct}%"></i></div>
+        <div class="usr-meta">${j.total ? `${j.done} / ${j.total}` : '总数待定'}
+          ${j.label ? ' · ' + esc(j.label) : ''}</div>
+      </div>`;
+    }).join('');
+  }
+
+  // ---- 历史列表 ----
+  $('job-list').innerHTML = rows.length ? `
+    <table class="job-tbl">
+      <thead><tr><th>任务</th><th>状态</th><th>提交人</th><th>开始</th><th>耗时</th>
+        <th>说明 / 失败原因</th><th></th></tr></thead>
+      <tbody>${rows.map(jobRowHtml).join('')}</tbody>
+    </table>` : '<div class="card-hint" style="display:block">还没有任务记录</div>';
+}
+
+function jobRowHtml(j) {
+  const note = j.state === '失败' ? (j.error || '失败')
+    : (j.label || '');
+  const btn = j.retryable
+    ? `<button class="btn btn-sm" data-jid="${esc(j.id)}" data-act="retry">重试</button>`
+    : (j.state === '排队'
+      ? `<button class="btn btn-sm" data-jid="${esc(j.id)}" data-act="cancel">取消</button>` : '');
+  return `<tr>
+    <td><b>${esc(j.kind_cn || j.kind)}</b></td>
+    <td><span class="job-state ${JOB_CLS[j.state] || ''}">${esc(j.state)}</span></td>
+    <td>${esc(j.username || '—')}</td>
+    <td class="nowrap">${esc(j.started_at || j.created_at || '')}</td>
+    <td class="nowrap">${j.secs ? fmtSecs(j.secs) : '—'}</td>
+    <td class="${j.state === '失败' ? 'job-err' : 'nowrap'}">${esc(note)}</td>
+    <td class="nowrap">${btn}</td>
+  </tr>`;
+}
+
+async function onJobOp(ev) {
+  const el = ev.target.closest('[data-jid]');
+  if (!el) return;
+  const jid = el.dataset.jid;
+  const act = el.dataset.act;
+  el.disabled = true;
+  if (act === 'retry') {
+    if (!confirm('重跑这个任务？\n会按当初的参数原样再来一遍。')) { el.disabled = false; return; }
+    const r = await call('job_retry', jid);
+    if (r && r.error) { toast(r.error, 'err'); el.disabled = false; return; }
+    toast('已开始重跑', 'ok');
+  } else {
+    const r = await call('job_cancel', jid);
+    if (r && r.error) { toast(r.error, 'err'); el.disabled = false; return; }
+    toast('已取消', 'ok');
+  }
+  await renderJobs();
+  await refreshJobsBadge();
+}
+
+/** 角标：只在「有任务在跑或有失败」时才亮，别没事也挂个红点 */
+async function refreshJobsBadge() {
+  const b = $('jobs-badge');
+  if (!b) return;
+  const r = await call('list_jobs', 20);
+  if (!r || r.error || !r.counts) { b.hidden = true; return; }
+  const n = (r.counts.running || 0) + (r.counts.failed || 0);
+  b.hidden = !n;
+  b.textContent = n;
+  b.classList.toggle('is-err', !r.counts.running && r.counts.failed);
+}
+
+let jobWatcher = null;
+function watchJobs() {
+  // 页面上才轮询：后台一直查会让「运行记录」被刷屏，也白费请求
+  if (jobWatcher) clearInterval(jobWatcher);
+  jobWatcher = setInterval(async () => {
+    if (!$('page-jobs').classList.contains('active')) return;
+    await renderJobs();
+  }, 1500);
+}
+
+function initJobs() {
+  $('job-list').addEventListener('click', onJobOp);
+  $('btn-jobs-refresh').addEventListener('click', async () => {
+    await renderJobs();
+    await refreshJobsBadge();
+    toast('已刷新', 'ok');
+  });
+  refreshJobsBadge();
+  watchJobs();
 }
 
 async function loadSettingsExtras() {
@@ -2656,19 +3068,207 @@ async function showAudit() {
   });
 }
 
+/* =====================================================================
+ * 使用说明（说明书）
+ * ---------------------------------------------------------------------
+ * 用户原话：「能不能增加个说明，就是怎么操作这个东西，就是跟个说明书似的，
+ *          然后刚进来就是让阅读，可以关闭，然后可以在别的地方放着这个说明，
+ *          没看到可以再去那个地方看」。
+ *  → 首访自动弹一次（localStorage 记「读过」，之后不再打扰）；
+ *    弹层可关（知道了 / 点遮罩 / ESC）；侧栏底部 + 入库页副标题各留一个入口。
+ *
+ * 写法要求：用**界面上真实的按钮名**说话（<span class="g-k">开始入库</span>），
+ * 别写成开发文档；提到文件路径的地方也要跟界面上看到的一致，否则用户对不上。
+ * ===================================================================== */
+const GUIDE = [
+  {
+    t: '这工具是干什么的',
+    h: `<p>一句话：<b>把一堆票交给它，它登记成一本台账；你在台账里挑一批，它给你出报销单。</b></p>
+        <ul>
+          <li>票可以是发票（PDF / OFD / XML）、火车票、飞机行程单、打车行程单、登机牌、图片，<b>混着放一个文件夹里就行</b>。</li>
+          <li>同一张票重复入库会自动查出来，不会重复计钱。</li>
+          <li>出单能出 <b>PDF</b>（打印用）和 <b>Excel</b>（还想再改）；还能把发票合并成一张 A4：上下两张，或者每页一张。</li>
+        </ul>`,
+  },
+  {
+    t: '照着走一遍就不怕了',
+    h: `<p>日常其实就两步，剩下都是可选的：</p>
+        <ol>
+          <li><b>先入库</b>：左边点 <span class="g-k">凭证入库</span>，选好文件夹，点 <span class="g-k">开始入库</span>。</li>
+          <li><b>再出单</b>：左边点 <span class="g-k">报销作业</span>，勾上要报的凭证，往下填单据参数，点 <span class="g-k">生成报销单</span>。</li>
+        </ol>
+        <div class="g-tip">刚装好的话，建议先去 <span class="g-k">设置</span> 把<b>默认报销人 / 部门 / 费用类别</b>填了 ——
+          以后每次出单就不用重复打字，类别下拉也是现成的。</div>`,
+  },
+  {
+    t: '第一步：凭证入库',
+    h: `<ol>
+          <li>把要报销的票都放进<b>一个文件夹</b>（发票和它对应的行程单放一起最好，程序能认出它们是同一笔）。</li>
+          <li>点 <span class="g-k">选择文件夹…</span> 挑这个文件夹。上面两个胶囊决定<b>含子文件夹</b>还是<b>只看当前层</b>。</li>
+          <li><b>本批报销人 / 备注批次</b>：填了这批票就带上这个标记，以后能按批次筛出来；留空也行。</li>
+          <li>点 <span class="g-k">开始入库</span>。跑的时候下面有进度条，跑完「入库结果」会自己展开，告诉你入了多少张、哪些是重复的、哪些没认出来。</li>
+        </ol>
+        <div class="g-tip">文件多、跑得久的时候，任务会自动进 <span class="g-k">任务中心</span>：你可以离开这一页去干别的，
+          在任务中心看它跑到哪了；万一失败了，点一下就能重跑。</div>`,
+  },
+  {
+    t: '第二步：报销作业（挑票 → 出单）',
+    h: `<ol>
+          <li>顶上四个胶囊 <span class="g-k">全部</span> <span class="g-k">待报销</span> <span class="g-k">已报销</span>
+              <span class="g-k">有风险</span> 是最常用的过滤，右边搜索框能搜销方 / 项目 / 事由 / 发票号；
+              其余条件收在 <span class="g-k">高级筛选</span> 里。</li>
+          <li>列表默认只显示最要紧的几列。想细看某一张，<b>点那一行</b>，会弹出它的全部字段（发票号、项目、销方、文件路径…）。</li>
+          <li>勾上要报的凭证，点工具栏里的 <span class="g-k">生成报销单</span> —— 页面会滚到下面，并把出单区展开。</li>
+          <li>填 <b>单据参数</b>（报销人 / 部门 / 日期 / 事由；差旅费还会多出出差起止地点、补助），
+              选 <b>单据类型</b> 和 <b>输出格式</b>，点 <span class="g-k">生成报销单</span>。</li>
+          <li>出好的文件在「生成的文件」里：<span class="g-k">打开</span> 直接看，
+              <span class="g-k">删除</span> 是送进回收站（后悔了还能捞回来）。</li>
+        </ol>
+        <div class="g-tip">补助有两种填法：<b>差旅费报销单</b>按「人数 × 天数 × 标准」填；
+          <b>模板二</b>是按人填（票据合计程序自己算，你只填补助金额）。选哪个都不用管另一块，程序会自己收起来。
+          <b>补助不做记忆</b>：每次做单都从空的开始，生成成功后自动归零（勾选保留），
+          免得上次的金额跟着进下一张单；填错想重来就用旁边的 <span class="g-k">清空</span>
+          / <span class="g-k">清空金额</span>。出差人员名单只按<b>这次</b>勾选的凭证来，
+          不会把上次的人带出来。</div>`,
+  },
+  {
+    t: '「出行人」认不出来怎么办',
+    h: `<p>程序按三层猜出行人：<b>票面上写的 → 手机号对照表 → 所在文件夹的名字</b>。猜出来的会用标记提醒你，别直接当准的用。</p>
+        <ul>
+          <li><b>打车行程单</b>票面上只有手机号没有姓名 → 去 <span class="g-k">设置</span> 的
+              <span class="g-k">出行人手机号对照</span> 加一行「手机号 空格 姓名」，以后自动认。</li>
+          <li><b>就缺这一两张</b>：在台账里勾中它，点 <span class="g-k">设置出行人</span> 手填。</li>
+          <li><b>想整体过一遍</b>：点 <span class="g-k">出行人核对</span>，票面读到的、手机号译出的、文件夹猜出来的会摆在一起，
+              你逐条确认或改掉。按钮上挂角标＝还有几张没核。</li>
+        </ul>
+        <div class="g-tip"><b>认不出来的建议都人工核一遍再出单</b> —— 出行人是打印到单据上的，填错了要重出。</div>`,
+  },
+  {
+    t: '「有风险」是什么意思',
+    h: `<ul>
+          <li><b>票面标记</b>：退票、差额退票、改签这类票会打上红 / 橙标签 —— 这些票和正常票不是一回事，报销前先看一眼。</li>
+          <li><b>重复报销</b>：同一张票之前已经报过，列表里会打「重复」标记提醒你。</li>
+          <li>点顶上的 <span class="g-k">有风险</span> 胶囊，就只看这些需要留意的。</li>
+        </ul>`,
+  },
+  {
+    t: '台账和数据安全',
+    h: `<ul>
+          <li>台账存在数据库里（程序目录下的 <span class="g-path">发票台账.db</span>）；
+              导出出来的 <span class="g-path">发票台账.xlsx</span> 只是<b>快照</b>，随时可以重新导，删掉也不影响数据。</li>
+          <li><span class="g-k">删除选中</span> / <span class="g-k">清空台账</span> <b>只删台账里的记录，不动你的原始发票文件</b>，
+              而且删之前会自动备份一份。</li>
+          <li>删生成的文件是 <b>送进回收站</b>，不是永久删除。</li>
+          <li>识别规则升级后，老记录不用删了重入：勾中它们点 <span class="g-k">重新识别</span>，
+              只刷新票面字段，状态 / 类别 / 报销人这些人工填的不会被动。</li>
+        </ul>`,
+  },
+  {
+    t: '几个人一起用（部署在服务器上时）',
+    h: `<ul>
+          <li>角色分四种：<b>管理员、财务审核员、业务人员、只读用户</b>，能做的事情不一样。
+              具体差别在 <span class="g-k">设置</span> 的「账号与权限」里能点开看对照表。</li>
+          <li>加人 / 改角色 / 重置密码 / 停用，都在 <span class="g-k">设置</span> 的 <span class="g-k">账号与权限</span>（只有管理员能进）。</li>
+          <li>谁改了什么：<span class="g-k">设置</span> → <span class="g-k">台账数据库</span> → <span class="g-k">审计日志</span>。</li>
+          <li>换身份 / 下班：左下角的 <span class="g-k">退出登录</span>。</li>
+        </ul>`,
+  },
+  {
+    t: '界面上的一些小方便',
+    h: `<ul>
+          <li><b>卡片标题都能点</b>，点一下就收起 / 展开；收起的状态会记着，下次进来还是那样。</li>
+          <li>左下角 <span class="g-k">主题外观</span> 有 4 套配色，点一下立刻换。</li>
+          <li>左下角 <span class="g-k">收起侧栏</span> 能把左边收窄，给表格腾地方。</li>
+          <li>程序出问题时看左边的 <span class="g-k">运行记录</span>；如果是<b>压根没启动起来</b>，
+              看程序目录里的 <span class="g-path">launch.log</span>。</li>
+          <li>忘了这份说明在哪 —— 它一直在左下角：<span class="g-k">使用说明</span>。</li>
+        </ul>`,
+  },
+];
+
+/** 说明书的 HTML：目录胶囊 + 一节气一节（标题里带序号，正文里的按钮名用 .g-k 标出来） */
+function guideHtml() {
+  const toc = GUIDE.map((g, i) =>
+    `<button type="button" data-g-jump="g-sec-${i + 1}"><span class="g-n">${i + 1}</span>${esc(g.t)}</button>`
+  ).join('');
+  const secs = GUIDE.map((g, i) =>
+    `<div class="g-sec" id="g-sec-${i + 1}"><h3><span class="g-n">${i + 1}</span>${esc(g.t)}</h3>${g.h}</div>`
+  ).join('');
+  return `<div class="guide">
+      <div class="g-lead">第一次用不用怕，照着下面走一遍就会了。
+        <b>日常就两步：先把票入库，再去报销作业出单。</b>这份说明随时能在左下角点开。</div>
+      <div class="g-toc">${toc}</div>
+      ${secs}
+    </div>`;
+}
+
+function showGuide() {
+  showModal({
+    title: '使用说明',
+    html: guideHtml(),
+    doc: true,          // 单栏宽版（.modal-doc）
+    noCancel: true,     // 只要一个「知道了」；点遮罩 / ESC 也能关
+    okText: '知道了，开始用',
+    onOk: hideModal,
+  });
+}
+
+function markGuideSeen() {
+  try { localStorage.setItem(LS.guideSeen, '1'); } catch (e) { /* 无痕模式等，忽略 */ }
+}
+
+function initGuide() {
+  const entry = $('btn-guide');
+  if (entry) entry.addEventListener('click', () => { showGuide(); markGuideSeen(); });
+
+  // 入库页副标题里的文字链（跟「哪一页」无关，用委托，不为它单独加 id）
+  document.addEventListener('click', (e) => {
+    if (e.target.closest && e.target.closest('[data-guide-open]')) { showGuide(); markGuideSeen(); }
+  });
+
+  const box = $('modal-text');
+  if (box) {
+    // 目录胶囊：点了滚到对应那一节（弹层自己滚，不影响背后的页面）
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('[data-g-jump]');
+      if (!b) return;
+      const el = document.getElementById(b.dataset.gJump);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  // ESC 关弹层（对确认框也一样：等于「取消」）
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && $('overlay').classList.contains('show')) hideModal();
+  });
+
+  // 第一次进来自动弹一次。延后一点，等 boot 里其它初始化跑完，
+  // 也避开「台账加载完自己弹了别的弹层」的情况。
+  if (!localStorage.getItem(LS.guideSeen)) {
+    setTimeout(() => {
+      if (!$('overlay').classList.contains('show')) showGuide();
+      markGuideSeen();
+    }, 900);
+  }
+}
+
 function boot() {
   // 界面跑在系统默认浏览器里，自绘标题栏没意义（浏览器自己有），隐藏掉
   document.body.classList.add('native-frame');
 
-  applyTheme(localStorage.getItem(LS.theme) || 'dark');
+  applyTheme(localStorage.getItem(LS.theme) || 'light');
+  purgeLegacyAllowanceKeys();
   renderThemes();
   initThemePop();
   initNav();
+  initFolds();
+  initGuide();
   initImportPage();
   initLedgerPage();
   initReportPage();
   initStatsPage();
   initSetPage();
+  initJobs();
   initLogPanel();
   initWindow();
   initMe();

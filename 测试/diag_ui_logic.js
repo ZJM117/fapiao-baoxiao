@@ -39,6 +39,39 @@ global.document = {
 global.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
 global.location = global.window.location;
 
+/* 真的可写 localStorage 桩：折叠状态得靠「存了再读回来」验证，
+   原来那个 setItem 是空转、读回来永远是 null，测了等于没测。
+   （把 getItem 从「永远 null」换成「空表里读」对其他用例是等价的：
+     测试期间没有任何东西写过别的键。） */
+const _store = {};
+global.localStorage = {
+  getItem: (k) => (k in _store ? _store[k] : null),
+  setItem: (k, v) => { _store[k] = String(v); },
+  removeItem: (k) => { delete _store[k]; },
+};
+
+/* 带**真实** classList 的元素桩。折叠就是往元素上挂/摘 .collapsed，
+   用上面那个 mkEl（add/remove 空转、contains 永远 false）当桩，
+   断言会全部假通过 —— 这种「测了但没测到」最坑，所以单独造一个。 */
+const mkFoldEl = (id) => {
+  const e = mkEl(id);
+  const set = new Set();
+  e.classList = {
+    add: (c) => set.add(c),
+    remove: (c) => set.delete(c),
+    toggle: (c, on) => {
+      const want = (on === undefined) ? !set.has(c) : !!on;
+      if (want) set.add(c); else set.delete(c);
+      return want;
+    },
+    contains: (c) => set.has(c),
+  };
+  e.setAttribute = (k, v) => { e['attr:' + k] = String(v); };
+  e.getAttribute = (k) => e['attr:' + k];
+  e.querySelector = () => null;      // 卡头：setFold 里对 null 有兜底分支
+  return e;
+};
+
 const box = new Function(
   src + '\n; return {showInvoiceDetail, renderLedgerBody, syncSelectionUI, onImportResult,'
       + ' currentFilter, filterSummary, deleteSelected, clearLedger, deleteOneRow,'
@@ -47,7 +80,13 @@ const box = new Function(
       + ' alwPayload, reportMeta, syncKindPills, initAlw, stampTag, refreshSelected,'
       + ' setTraveler, loadPhoneMap, savePhoneMap,'
       + ' renderJy, jyPayload, jySum, jyReal, jyNames, JY_KIND, refreshJyPeople, fillJyByDays,'
+      + ' clearAlw, clearJy, resetAllowances, pruneJyAlw, purgeLegacyAllowanceKeys,'
+      + ' renderJobs, jobRowHtml, fmtSecs, JOB_CLS,'
       + ' tvrBadge, renderTvr, syncTvBadge, saveTravelerReview,'
+      // 卡片折叠（2026-09-17）：存取、开关、以及「整组展开」那一下
+      + ' readFolds, saveFold, setFold, toggleFold, setFoldGroup, openWorkPanel, applyFolds, LS,'
+      // 使用说明（2026-09-17）：内容表、拼 HTML、入口
+      + ' GUIDE, guideHtml, showGuide, initGuide, markGuideSeen,'
       // tvr 是 app.js 里的模块级 let，这里用闭包拿一个读写口子（只为测试用）
       + ' setTvrTest: (v) => { tvr = v; }, getTvrTest: () => tvr};'
 )();
@@ -85,27 +124,185 @@ const einv = {
 
 const html = fs.readFileSync(path.join(GUI, 'index.html'), 'utf8');
 
+/* =====================================================================
+ * 主题默认值 + 卡片折叠（2026-09-17）
+ * ===================================================================*/
+console.log('— 主题默认值 —');
+{
+  const css = fs.readFileSync(path.join(GUI, 'style.css'), 'utf8');
+  const extra = fs.readFileSync(path.join(GUI, 'extra.css'), 'utf8');
+
+  // 默认外观＝亮色清新。三处必须对上，漏一处就会出现「html 写着 light、
+  // JS 又套回 dark」的首屏闪色（先深一帧再变浅，很难看）。
+  chk(/<html[^>]*data-theme="light"/.test(html),
+    'index.html 静态写着 data-theme="light"（不然首屏会先闪一帧深色）', html.slice(0, 260));
+  chk(!/data-theme="dark"/.test(html.split('<body>')[0]), 'html 上没有 data-theme="dark" 的残留');
+  chk(/\{\s*id:\s*'light'/.test(src.slice(src.indexOf('const THEMES'), src.indexOf('const THEMES') + 400)),
+    'THEMES 里「亮色清新」排第一位（主题面板第一个就是默认那套）');
+  chk(/getItem\(LS\.theme\)\s*\|\|\s*'light'/.test(src), "boot() 的兜底是 'light'");
+  chk(!/t\.id === id\)\s*id = 'dark'/.test(src), "applyTheme() 找不到 id 时兜底 light，不是 dark");
+  for (const id of ['light', 'warm-gold', 'tiffany']) {
+    chk(css.includes(`[data-theme="${id}"]`), `style.css 里有 [data-theme="${id}"] 变量块`);
+  }
+
+  // ⭐ 黑行回归：:root 装的是深色那套，浅色主题漏一条颜色变量就会漏出深色值。
+  //    「凭证明细表头压着一条黑带」就是这么来的（--table-header-bg 漏写 → #0a1521）。
+  // ⚠️ 必须用正则定位那个变量块：文件开头的注释里也出现过 `[data-theme="light"]`
+  //    这几个字，用 indexOf 会捞到注释，然后切出一段垃圾（踩过）。
+  const lightBody = (css.match(/\[data-theme="light"\]\s*\{([\s\S]*?)\n\}/) || ['', ''])[1];
+  chk(/--table-header-bg\s*:\s*#eef1f5/.test(lightBody),
+    'light 主题有 --table-header-bg（漏了 ⇒ 表头/分组头变近黑）', lightBody.slice(-360));
+  for (const v of ['--table-row-hover', '--scrollbar-thumb', '--scrollbar-thumb-hover', '--border-strong',
+                   '--text-primary', '--bg-card', '--green', '--red']) {
+    chk(new RegExp(v + '\\s*:').test(lightBody), `light 主题定义了 ${v}`);
+  }
+}
+
+console.log('— 卡片折叠 —');
+{
+  const extra = fs.readFileSync(path.join(GUI, 'extra.css'), 'utf8');
+
+  chk(/id="work-panel"[^>]*data-fold="closed"/.test(html),
+    '出单区整组默认收起（data-fold="closed"）');
+  chk(/id="work-panel-body"/.test(html), '出单区正文包了 fold-body，收起时整块藏');
+  chk(/id="work-panel-head"[^>]*aria-expanded="false"/.test(html) ||
+      /aria-expanded="false"[^>]*id="work-panel-head"/.test(html),
+    '把手上带 aria-expanded="false"（状态可读、无障碍）');
+  chk(/class="card card-wide" data-fold="closed"/.test(html),
+    '设置页「出行人手机号对照」默认收起');
+  chk(/data-fold="closed"[\s\S]{0,400}台账数据库/.test(html), '设置页「台账数据库」默认收起');
+  chk(/data-fold="closed"[\s\S]{0,200}目录信息/.test(html), '设置页「目录信息」默认收起');
+  const nOpen = (html.match(/<div/g) || []).length, nClose = (html.match(/<\/div>/g) || []).length;
+  chk(nOpen === nClose, `<div> 开合配平（${nOpen} 开 / ${nClose} 闭）`);
+
+  // 折叠开关必须有样式落地，否则就是「写了 class 没人管」
+  chk(/\.card\.collapsed\s*>\s*\*:not\(\.card-head\)\s*\{[^}]*display:\s*none/.test(extra),
+    '收起状态真的把正文藏起来（.card.collapsed > *:not(.card-head)）');
+  chk(/#work-panel\.collapsed\s+\.fold-body/.test(extra), '出单区收起时藏 fold-body');
+  chk(/\.card\s*>\s*\.card-head::after/.test(extra), '卡头右侧有折叠三角');
+  chk(/justify-content:\s*flex-start/.test(extra.slice(extra.indexOf('.card-head {'), extra.indexOf('.card-head {') + 400)),
+    '卡头改成 flex-start（space-between 会把说明挤到正中间）');
+
+  // 状态存取：存了要能原样读回来
+  box.saveFold('t.k1', true);
+  chk(box.readFolds()['t.k1'] === 1, '存「收起」能读回来（1）');
+  box.saveFold('t.k1', false);
+  chk(box.readFolds()['t.k1'] === 0, '再存「展开」能读回来（0）');
+  chk(typeof box.LS.folds === 'string' && box.LS.folds.length > 0, 'LS.folds 有键名');
+
+  // 出单区整组开关（用带真 classList 的桩，不然断言会假通过）
+  const g = els['work-panel'] = mkFoldEl('work-panel');
+  els['work-panel-head'] = mkFoldEl('work-panel-head');
+  els['work-panel-hint'] = mkFoldEl('work-panel-hint');
+  box.setFoldGroup(g, true);
+  chk(g.classList.contains('collapsed'), 'setFoldGroup(true) 把整组收起来');
+  chk(els['work-panel-head'].getAttribute('aria-expanded') === 'false', '收起时把手 aria-expanded=false');
+  chk(/展开/.test(els['work-panel-hint'].textContent), '收起时说明改写成「点这里展开…」',
+    els['work-panel-hint'].textContent);
+  box.openWorkPanel();
+  chk(!g.classList.contains('collapsed'), '「生成报销单 ↓」能把整组重新展开');
+  chk(els['work-panel-head'].getAttribute('aria-expanded') === 'true', '展开时把手 aria-expanded=true');
+  box.applyFolds();                 // 一张卡都没有（DOM 桩）也不能抛
+  chk(true, 'applyFolds() 在空 DOM 上不抛错');
+
+  // 路径框悬停出完整路径（长路径被省略号截了，得能看全）
+  chk(/src-path'\)\.addEventListener\('mouseenter'/.test(src),
+    '路径框在 mouseenter 时把当前值挂到 title（悬停显示完整路径）');
+  chk(/flex: 0 1 380px/.test(extra), '路径框限宽 380，不再撑满一整行');
+}
+
+console.log('— 使用说明（说明书） —');
+{
+  const extra = fs.readFileSync(path.join(GUI, 'extra.css'), 'utf8');
+
+  // 用户要的三件事：① 刚进来就让人读 ② 可以关 ③ 别处留个地方，忘了能再去点
+  chk(typeof box.LS.guideSeen === 'string' && box.LS.guideSeen.length > 0,
+    'LS 里有 guideSeen（记「看过了」，不然每次进来都弹）');
+  chk(/id="btn-guide"/.test(html), '侧栏底部有常驻入口（忘了可以去那儿再打开）');
+  chk(/data-guide-open/.test(html), '入库页副标题里也留了一个入口');
+  chk(/getItem\(LS\.guideSeen\)/.test(src) && /setItem\(LS\.guideSeen/.test(src),
+    'initGuide：没看过才自动弹；看完 / 点开就记上标记');
+  chk(/setTimeout\([\s\S]{0,240}showGuide\(\)/.test(src.slice(src.indexOf('function initGuide'))),
+    '首访自动弹（延后一点，别跟台账加载抢同一帧）');
+  chk(/Escape/.test(src.slice(src.indexOf('function initGuide'), src.indexOf('function boot'))),
+    'ESC 也能关弹层');
+  // 弹层里如果已经在显示别的东西（比如刚弹了确认框），就别再压一层
+  chk(/classList\.contains\('show'\)[\s\S]{0,60}showGuide\(\)/.test(src),
+    '已经有弹层在显示时不抢着弹（先看 overlay 有没有 show）');
+
+  // 说明书是「一栏长文」，要有自己的宽度和「只要一个知道了」
+  chk(/noCancel/.test(src) && /modal-cancel'\)\.style\.display = o\.noCancel/.test(src),
+    'showModal 支持 noCancel（说明书只留一个「知道了」）');
+  chk(/modal-doc/.test(src) && /\.modal\.modal-doc\s*\{[^}]*width:\s*780px/.test(extra),
+    '说明书走 .modal-doc 宽版单栏（780px）');
+  chk(/\.link-btn\s*\{/.test(extra), '副标题里那个文字链按钮有样式（否则是个灰底方块）');
+
+  // 内容结构：每一节都要有标题和正文；目录胶囊数 = 节数
+  const g = box.guideHtml();
+  chk(box.GUIDE.length >= 8, `说明书至少 8 节（实际 ${box.GUIDE.length} 节）`);
+  chk((g.match(/class="g-sec"/g) || []).length === box.GUIDE.length, '每一节都渲染出来了');
+  chk((g.match(/data-g-jump="/g) || []).length === box.GUIDE.length,
+    '目录胶囊数 = 节数（点一下跳到那一节）');
+  chk(/class="g-lead"/.test(g) && /class="g-toc"/.test(g), '开头有引导语 + 目录');
+  chk(box.GUIDE.every((x) => x.t && x.h && x.h.length > 40), '每节都是实打实的正文，不是空壳');
+  chk(/\.g-sec\s+h3/.test(extra) && /\.g-toc button/.test(extra) && /\.g-tip\s*\{/.test(extra),
+    '说明书的排版样式（节标题 / 目录 / 提示块）在 extra.css 里都有定义');
+  chk(/class="g-k"/.test(g) && /\.g-k\s*\{/.test(extra),
+    '正文里的按钮名用 .g-k 标出来，跟普通文字区分');
+
+  // ⭐ 说明书里提到的界面控件，界面上必须真的有 ——
+  //   防的是「说明书写着点某某按钮，可界面上根本没这颗按钮」（说明书最容易烂在这儿）
+  const names = [...g.matchAll(/<span class="g-k">([^<]+)<\/span>/g)].map((m) => m[1]);
+  const missNames = [...new Set(names)].filter((n) => !html.includes(n));
+  chk(names.length > 15 && !missNames.length,
+    `说明书提到的 ${names.length} 处控件名在 index.html 里都找得到`, JSON.stringify(missNames));
+
+  let threw = '';
+  try { box.showGuide(); } catch (e) { threw = String(e && e.message); }
+  chk(!threw, 'showGuide() 跑得通不抛错', threw);
+  box.markGuideSeen();
+  chk(global.localStorage.getItem(box.LS.guideSeen) === '1',
+    'markGuideSeen() 真把「看过了」写进去了（不然下次进来还弹）');
+
+  // 入库页副标题：原来又长又写着「登记到 Excel 台账」，而台账真身早就换成 SQLite 了
+  const sub = (html.match(/id="page-in"[\s\S]*?class="page-sub">([\s\S]*?)<\/div>/) || ['', ''])[1];
+  const subText = sub.replace(/<[^>]+>/g, '').replace(/\s+/g, '');
+  chk(subText.length > 0 && subText.length <= 70,
+    `入库页副标题精简到一行（${subText.length} 字）`, sub);
+  chk(!/Excel/.test(sub), '副标题不再写「登记到 Excel 台账」（台账真身是 SQLite，这句是过时的）');
+  chk(/#page-in\s*\{\s*max-width:\s*880px/.test(extra),
+    '入库页栏宽收到 880（原来 1120 → 卡片拉满、右边空一大片，用户说「不能居中吗」）');
+}
+
 console.log('— 台账表格 —');
 box.state.rows = [train, einv];
 box.renderLedgerBody();
 const bodyHtml = els['ledger-body'].innerHTML;
-const rowHtmls = bodyHtml.split('<tr ').slice(1);
+// 分组头（.grp-row）只占一格，不算「一行几个单元格」
+const rowHtmls = bodyHtml.split('<tr ').slice(1).filter((h) => !/^class="grp-row/.test(h));
 const perRow = rowHtmls.map((h) => (h.match(/<td[ >]/g) || []).length);
-chk(perRow.every((n) => n === 13), `每行 13 个 td（实际 ${JSON.stringify(perRow)}）`, bodyHtml.slice(0, 500));
+chk(perRow.every((n) => n === 7), `每行 7 个 td（实际 ${JSON.stringify(perRow)}）`, bodyHtml.slice(0, 500));
+chk(bodyHtml.includes('grp-row') && bodyHtml.includes('grp-todo') && bodyHtml.includes('grp-done'),
+  '列表按状态分了组');
+chk(bodyHtml.indexOf('待报销</span>') < bodyHtml.indexOf('grp-done'),
+  '「待报销」那组排在「已报销」前面（先干活的）');
 // 表头列数必须和行内单元格数一致，否则表格一定错位
-const ledgerHead = html.split('id="ledger-body"')[0].split('<thead>').pop();
+const ledgerHead = html.split('id="ledger-body"')[0].split('<table').pop();
 const headCols = (ledgerHead.match(/<th[ >]/g) || []).length;
-chk(headCols === 13, `台账表头 13 列（实际 ${headCols}）`);
-const repHead = html.split('id="rep-body"')[0].split('<thead>').pop();
+chk(headCols === 7, `台账表头 7 列（实际 ${headCols}）`);
+const repHead = html.split('id="rep-body"')[0].split('<table').pop();
 const repCols = (repHead.match(/<th[ >]/g) || []).length;
 const repRowCells = ((html.split('id="rep-body"')[1] || '').match(/colspan="(\d+)"/) || [])[1];
 chk(repCols === Number(repRowCells), `报销单表头 ${repCols} 列 = 空态 colspan ${repRowCells}`);
 chk(bodyHtml.includes('ct-train') && bodyHtml.includes('ct-inv'), '凭证类型色标有渲染');
-chk(bodyHtml.includes('G1234 武汉-宜昌东'), '行程明细进表格了');
+chk(bodyHtml.includes('G1234 武汉-宜昌东'), '行程明细并进「事项 / 行程」格里了');
 chk(bodyHtml.includes('湖北恩施建始龙坪网格'), '项目/事由列还在');
-chk(bodyHtml.includes('td-dash'), '火车票没有发票号时显示占位符');
+chk(bodyHtml.includes('td-sub'), '事项格里还有一行副行（行程/销方），信息没丢');
+chk(bodyHtml.includes('td-dash'), '空字段显示占位符而不是空白');
 chk(bodyHtml.includes('tag-ok') && bodyHtml.includes('tag-mute'), '已/未报销标签都在');
 chk(bodyHtml.includes('tag-dup'), '提示含「重复」时打重复标签');
+// 界面上不再平铺的字段（发票号/费用类别/批次/税号）不该出现在行里 —— 它们进了详情弹层
+chk(!bodyHtml.includes('26349119423005870096'), '发票号不再挤在列表里（点行看详情）');
 
 console.log('— 查询条件收集（这次修的重点） —');
 const FILTER_IDS = ['f-status', 'f-ctype', 'f-category', 'f-batch', 'f-person',
@@ -342,6 +539,64 @@ chk(html.includes('id="r-alw-on"') && html.includes('id="alw-body"') && html.inc
 chk(/initAlw\(\)/.test(src), '初始化里调了 initAlw（不然表是死的）');
 chk(/addEventListener\('input'/.test(src) && /data-act="alw-del"/.test(src),
   '补助表的输入 / 删行事件有绑定');
+
+/* ---------- ⭐ 补助不许「自己填好」（用户 2026-09-17 报的 bug） ----------
+ * 用户原话：「出差补助，我之前填了怎么会保存上了，我这次啥也没填的，就都填好了，
+ *           出差人员怎么也直接自己输入完了，就是会有残留信息」。
+ * 根因：这三样被存进 localStorage（invoice-rp.alw / .alwOn / .jyAlw）并在下次进来读回来。
+ * 补助会跟着进单据 → 那是**算错钱**，不是省事。下面这组断言把它钉死。 */
+console.log('\n— 补助不做「记忆」（不残留上一次的值）—');
+chk(box.state.alw.length === 0, '打开页面时补助表是空的（不读上次的值）', box.state.alw.length);
+chk(box.state.alwOn === false, '「计入差旅费补助」也不会被上次的勾选带回来');
+chk(Object.keys(box.state.jyAlw).length === 0, '按人补助的金额同样是空的');
+// 只认「读 / 写」这种用法；启动时**清掉**老键是另一回事（下面单独测）
+chk(!/getItem\(\s*'invoice-rp\.(alw|alwOn|jyAlw)'/.test(src)
+  && !/setItem\(\s*'invoice-rp\.(alw|alwOn|jyAlw)'/.test(src),
+  'localStorage 里不再读也不再写补助的键（alw / alwOn / jyAlw）');
+// 老版本已经写进去的值要主动清掉，不能只是「不读」
+const _ls = global.localStorage;
+_ls.setItem('invoice-rp.alw', '[{"rate":"100"}]');
+_ls.setItem('invoice-rp.alwOn', '1');
+_ls.setItem('invoice-rp.jyAlw', '{"张三":500}');
+box.purgeLegacyAllowanceKeys();
+chk(_ls.getItem('invoice-rp.alw') === null && _ls.getItem('invoice-rp.alwOn') === null
+  && _ls.getItem('invoice-rp.jyAlw') === null,
+  '启动时把老版本残留的三个键从浏览器里清掉（不是只不读）');
+chk(!/loadAlw|saveAlw|loadJyAlw|saveJyAlw/.test(src),
+  '装载 / 保存补助的那几个函数整个删掉，不留半死不活的空壳');
+// 「出差人员」名单只认本次勾选的凭证
+box.state.jyPeople = [];
+box.state.jyAlw = { 张三: 500 };
+chk(box.jyNames().length === 0,
+  '没勾凭证时「出差人员」一个都不冒出来（以前会把上次填过的人补回来）', JSON.stringify(box.jyNames()));
+chk(box.jyPayload().length === 0, '所以也不会把上次的人发给后端');
+box.state.jyPeople = [{ name: '李强', bills: 100 }];
+box.state.jyAlw = { 李强: 200, 王五: 999 };
+box.pruneJyAlw();
+chk(box.state.jyAlw['王五'] === undefined && box.state.jyAlw['李强'] === 200,
+  '取消勾选的人，他的补助金额会被丢掉（不挂在表里）', JSON.stringify(box.state.jyAlw));
+// 清空 / 出单后归零
+box.state.alwOn = true;
+box.state.alw = [{ name: '伙食补助费', people: '3', days: '4', rate: '100', amount: '', manual: false }];
+box.clearAlw();
+chk(box.state.alw.length === 0 && box.state.alwOn === false && box.alwSum() === 0,
+  '「清空」按钮：行清掉、勾选取消、合计归零');
+box.state.alwOn = true;
+box.state.alw = [{ name: '伙食补助费', people: '3', days: '4', rate: '100', amount: '', manual: false }];
+box.state.jyPeople = [{ name: '李强', bills: 100 }];
+box.state.jyAlw = { 李强: 800 };
+box.resetAllowances();
+chk(box.alwSum() === 0 && box.alwRowAmount(box.state.alw[0]) === 0,
+  '生成成功后补助自动归零（金额不会流到下一张单）', JSON.stringify(box.state.alw));
+chk(box.state.alwOn === true, '归零时保留「计入补助」的勾选（不用重新勾一次）');
+chk(box.jySum() === 0 && Object.keys(box.state.jyAlw).length === 0, '按人补助也一起清零');
+chk(html.includes('id="btn-alw-clear"') && html.includes('id="btn-jy-clear"'),
+  '两块补助各有「清空」入口');
+chk(/btn-alw-clear/.test(src) && /btn-jy-clear/.test(src), '两个清空按钮都绑了事件');
+chk(/resetAllowances\(\)/.test(src), 'makeReport 生成成功后调用了归零');
+// 还原，别影响后面的用例
+box.state.alw = []; box.state.alwOn = false; box.state.jyPeople = []; box.state.jyAlw = {};
+
 box.state.alwOn = true;
 box.state.alw = [{ name: '伙食补助费', people: '3', days: '4', rate: '100', amount: '', manual: false }];
 chk(box.alwRowAmount(box.state.alw[0]) === 1200, '3 人 × 4 天 × 100 = 1200',
@@ -394,7 +649,9 @@ box.renderLedgerBody();
 chk(els['ledger-body'].innerHTML.includes('tag-stamp'), '台账行里画出了票面标记标签',
   els['ledger-body'].innerHTML.slice(0, 220));
 chk(els['ledger-body'].innerHTML.includes('差额退票'), '标签上写的就是票面标记本身');
-chk(!/tag-stamp/.test(els['ledger-body'].innerHTML.split('</tr>')[1] || ''),
+const markRows = els['ledger-body'].innerHTML
+  .split('<tr ').slice(1).filter((h) => !/^class="grp-row/.test(h));
+chk(!/tag-stamp/.test(markRows[1] || ''),
   '没有标记的那一行不会多出标签');
 
 box.state.selRows = [Object.assign({}, train, { '票面标记': '改签' })];
@@ -427,8 +684,16 @@ const lHtml = els['ledger-body'].innerHTML;
 chk(lHtml.includes('出行人'), '台账表头/行里有「出行人」这一列');
 chk(lHtml.includes('张三'), '票面的出行人渲染进表格');
 chk(/td-nowrap td-c/.test(lHtml), '出行人这一列有自己的单元格类');
-chk((lHtml.match(/td-dash/g) || []).length >= 2,
-  '没认出来的（发票号空 + 出行人空）都显示占位符而不是空白');
+chk((lHtml.match(/td-dash/g) || []).length >= 1,
+  '出行人没认出来的那张显示占位符而不是空白');
+// 事项 / 行程 / 销方 / 出行人全空的一行，也不该留白
+box.state.rows = [Object.assign({}, einv, {
+  '项目/事由': '', '行程/明细': '', '销方名称': '', '出行人': '' })];
+box.renderLedgerBody();
+chk((els['ledger-body'].innerHTML.match(/td-dash/g) || []).length >= 2,
+  '整行都没内容时，事项格和出行人列都给占位符');
+box.state.rows = [train, einv];
+box.renderLedgerBody();
 chk(/设置出行人/.test(lHtml) || /设置出行人/.test(html), '占位符/条目里指到了「设置出行人」这个动作');
 
 // 明细弹层：有人名 → 显示人名；票面没印人名 → 4 处都提「未识别」并指向手填
@@ -584,9 +849,9 @@ box.state.jyAlw = { 李强: 1200 };
 box.renderJy();
 const jyHtml = els['jy-body'].innerHTML;
 chk(jyHtml.includes('李强') && jyHtml.includes('李贵清'),
-  '按出行人列出名单（只有补助、没票的人也在）', jyHtml.slice(0, 300));
+  '按出行人列出名单（后端给的人一个不少，票据合计为 0 的也在）', jyHtml.slice(0, 300));
 chk(jyHtml.includes('1,560.00'), '票据合计显示后端给的数（不是界面自己估的）');
-chk(/value="1200"/.test(jyHtml), '补助金额回填进输入框（下次进来还在）');
+chk(/value="1200"/.test(jyHtml), '补助金额回填进输入框（本次会话内还在；页面不留存）');
 chk(jyHtml.includes('2,760.00'), '实际＝票据合计＋补助（1560＋1200）', jyHtml.slice(-260));
 chk(box.jyReal('李强') === 2760 && box.jyReal('李贵清') === 0, '没填补助的人，实际＝他自己的票据合计');
 chk(box.jySum() === 1200, `补助合计只算补助（实际 ${box.jySum()}）`);
@@ -614,13 +879,108 @@ chk(!box.reportMeta().allowance_by, '一个人都没填补助 → 不带，单�
 box.state.kind = '模板二';
 box.syncKindPills();
 chk(els['jy-block'].hidden === false, '选了这个类型 → 「按人」那块显示出来');
-chk(els['__#page-report .alw-block:not(#jy-block)'].hidden === true,
+chk(els['__#work-panel .alw-block:not(#jy-block)'].hidden === true,
   '同时把「人数×天数×标准」那块收起来（免得两块都摆着）');
 box.state.kind = '差旅费报销单';
 box.syncKindPills();
 chk(els['jy-block'].hidden === true, '切回差旅费报销单 → 「按人」那块收起来');
-chk(els['__#page-report .alw-block:not(#jy-block)'].hidden === false,
+chk(els['__#work-panel .alw-block:not(#jy-block)'].hidden === false,
   '「人数×天数×标准」那块放出来');
 
-console.log(fails ? `\n❌ ${fails} 项不通过` : '\n✅ 全部通过');
-process.exit(fails ? 1 : 0);
+/* ==================================================================
+ * 任务中心（P0-4）：谁在跑、跑到哪、失败能不能点「重试」
+ * ================================================================== */
+console.log('\n— 任务中心 —');
+chk(box.fmtSecs(45) === '45 秒', `秒级显示（实际 ${box.fmtSecs(45)}）`);
+chk(box.fmtSecs(125) === '2 分 5 秒', `分钟级显示（实际 ${box.fmtSecs(125)}）`);
+chk(box.fmtSecs(7325) === '2 时 2 分', `小时级显示（实际 ${box.fmtSecs(7325)}）`);
+chk(box.fmtSecs(null) === '0 秒', '没有耗时不显示 NaN');
+
+// 渲染单行：状态色、按钮、转义
+const rowRun = box.jobRowHtml({ id: 'a1', kind: 'start_import', kind_cn: '入库建账',
+  state: '运行中', username: '小张', created_at: '2026-09-17 10:00:00',
+  started_at: '2026-09-17 10:00:01', error: '', label: '', total: 10, done: 4,
+  secs: 12, retryable: false });
+const rowBad = box.jobRowHtml({ id: 'a2', kind: 'make_report', kind_cn: '生成报销单',
+  state: '失败', username: 'admin', created_at: '2026-09-17 09:00:00',
+  started_at: '2026-09-17 09:00:01', error: 'RuntimeError: 打印失败<script>x</script>',
+  label: '', total: 0, done: 0, secs: 19, retryable: true });
+const rowOk = box.jobRowHtml({ id: 'a3', kind: 'merge_invoices', kind_cn: '合并 PDF',
+  state: '成功', username: '李四', created_at: '2026-09-17 08:00:00',
+  started_at: '2026-09-17 08:00:00', error: '', label: '', total: 0, done: 0,
+  secs: 5, retryable: false });
+const rowQ = box.jobRowHtml({ id: 'a4', kind: 'export_summary', kind_cn: '导出统计',
+  state: '排队', username: '张三', created_at: '2026-09-17 08:00:00',
+  started_at: '', error: '', label: '', total: 0, done: 0, secs: 0, retryable: false });
+
+chk(rowRun.includes('job-state run') && rowRun.includes('入库建账'),
+  '运行中的任务带 run 状态色', rowRun);
+chk(!rowRun.includes('data-act="retry"'), '没失败的任务不摆「重试」按钮');
+chk(rowBad.includes('data-act="retry"') && rowBad.includes('data-jid="a2"'),
+  '失败的任务有「重试」按钮，还带着任务号', rowBad);
+chk(rowBad.includes('job-state err'), '失败带 err 状态色');
+chk(rowBad.includes('&lt;script&gt;') && !rowBad.includes('<script>'),
+  '失败原因里的尖括号被转义（任务名/报错是外部来的）', rowBad);
+chk(!rowOk.includes('data-act='), '成功的任务没有操作按钮');
+chk(rowQ.includes('data-act="cancel"'), '排队中的任务可以取消', rowQ);
+chk(rowQ.includes('—'), '没开始的任务耗时显示「—」，不是 0 秒');
+
+// 渲染整页：走一遍 renderJobs（api 打桩，不连后端）
+const FAKE_JOBS = {
+  rows: [
+    { id: 'a1', kind: 'start_import', kind_cn: '入库建账', state: '运行中', username: '小张',
+      created_at: '2026-09-17 10:00:00', started_at: '2026-09-17 10:00:01', ended_at: '',
+      error: '', label: '入库建账 · /票据', total: 10, done: 4, secs: 12, retryable: false },
+    { id: 'a2', kind: 'make_report', kind_cn: '生成报销单', state: '失败', username: 'admin',
+      created_at: '2026-09-17 09:00:00', started_at: '2026-09-17 09:00:01',
+      ended_at: '2026-09-17 09:00:20', error: 'RuntimeError: 打印失败',
+      label: '', total: 0, done: 0, secs: 19, retryable: true },
+  ],
+  counts: { running: 1, queued: 0, done_today: 3, failed: 1 },
+  busy: true, busy_label: '入库建账', busy_user: '小张', kinds: {},
+};
+let fakeJobs = FAKE_JOBS;
+global.window.pywebview = { api: { list_jobs: async () => fakeJobs } };
+
+(function runJobTests() {
+  return box.renderJobs().then(() => {
+    const stat = els['job-stat'].innerHTML;
+    chk((stat.match(/job-chip/g) || []).length === 4, '汇总区 4 个数字块', stat);
+    chk(stat.includes('>1<') && stat.includes('今日成功'), '把「运行中 1 / 今日成功 3」显示出来', stat);
+    chk(stat.includes('job-chip err'), '有失败时汇总块标红');
+
+    const rb = els['job-running-body'].innerHTML;
+    chk(rb.includes('入库建账') && rb.includes('小张'),
+      '正在执行区写着是谁在跑什么', rb);
+    chk(rb.includes('width:40%'), `进度条按 done/total 走（4/10 → 40%，实际 ${
+      (rb.match(/width:\d+%/) || ['无'])[0]}）`, rb);
+
+    const list = els['job-list'].innerHTML;
+    chk(list.includes('job-tbl') && list.includes('<thead>'), '历史列表渲染成表格', list.slice(0, 200));
+    chk(list.includes('data-act="retry"'), '列表里能直接点重试');
+    chk((els['job-running-hint'] || {}).textContent === '1 个在进行',
+      '标题上写着有几个在跑');
+
+    // 空列表分支
+    fakeJobs = { rows: [], counts: { running: 0, queued: 0, done_today: 0, failed: 0 },
+                 busy: false, kinds: {} };
+    return box.renderJobs();
+  }).then(() => {
+    chk(els['job-list'].innerHTML.includes('还没有任务记录'), '一条任务都没有时给句人话',
+      els['job-list'].innerHTML);
+    chk(els['job-running-body'].innerHTML.includes('空闲'), '没任务在跑时说明空闲');
+
+    // 后端报错时不能白屏
+    fakeJobs = { error: 'db.py: database is locked' };
+    return box.renderJobs();
+  }).then(() => {
+    chk(els['job-list'].innerHTML.includes('读不到任务列表'), '后端出错时如实显示，不白屏',
+      els['job-list'].innerHTML);
+  });
+})().then(() => {
+  console.log(fails ? `\n❌ ${fails} 项不通过` : '\n✅ 全部通过');
+  process.exit(fails ? 1 : 0);
+}).catch((e) => {
+  console.log('\n❌ 任务中心测试自己抛错了：' + e);
+  process.exit(1);
+});

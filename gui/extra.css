@@ -1,6 +1,8 @@
 /* =====================================================================
  * 发票报销工具 · 补充样式
- * 只放本项目新增的类，不动 style.css（那套 12 主题样式与发票管理共用）。
+ * 只放本项目新增的类；主题变量与基础组件在 style.css。
+ * （2026-09-17 起 style.css 已按「深空冷光 · Financial Dashboard」重构，
+ *   与「发票管理」项目的那份**不再保持同步** —— 两边是各自的副本。）
  *
  * ⚠️ 变量名一律用 style.css 里真实存在的：
  *    --bg-app / --bg-card / --bg-card-hover / --bg-input / --bg-titlebar
@@ -9,9 +11,29 @@
  *    （没有 --card2 / --input-bg / --text / --ok / --err / --warn）
  * ===================================================================== */
 
+/* ⚠️⚠️ 别删：自定义 display 会**盖掉** HTML 的 hidden 属性。
+   原因不是优先级，是「作者样式 > 浏览器默认样式」—— 浏览器内置表里的
+   `[hidden] { display: none }` 永远输给作者写的 `.adv-panel { display: grid }`。
+   2026-09-17 用真截图查出来它一共害了三处（都是「明明写了藏起来、其实一直露着」）：
+     ① 报销作业页「高级筛选」里那 9 个条件一直铺在面上 —— 上一轮做的折叠等于没做
+     ② 本机模式也露着「上传本机文件夹…」（这儿根本没有 NAS，点了就报错）
+     ③ 其它用 hidden 开关的小块同理
+   所以在这里统一兜底，别再一个个去补 `[hidden]`。 */
+[hidden] { display: none !important; }
+
 /* ---------- 表单控件 ---------- */
-.filter-row { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; }
-.fi-label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-secondary); }
+/* 一行里的字段**均分铺满**：原来各项按自身宽度挤在左边、右半边空着，整页看着「平」。
+   给每个 label 一个 flex-basis 让它自己长开，输入框再铺满 label 的宽度，标签就齐了。
+   ⚠️ 输入框的宽度是 HTML 里 inline style 写死的，只有 !important 能盖掉，
+      所以这几条别删；下面的 .range-wrap 例外（金额区间是两个框）。 */
+.filter-row { display: flex; flex-wrap: wrap; gap: 14px 16px; align-items: flex-end; }
+.filter-row > .fi-label { flex: 1 1 168px; min-width: 0; }
+.filter-row .fi,
+.filter-row .sel { width: 100% !important; min-width: 0; }
+.filter-row > .btn { flex: 0 0 auto; }
+.filter-row .range-wrap { display: flex; align-items: center; gap: 8px; width: 100%; }
+.filter-row .range-wrap .fi { width: auto !important; flex: 1 1 0; min-width: 0; }
+.fi-label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .fi, .sel {
   height: 32px; padding: 0 9px; font-size: 12.5px; font-family: var(--font);
   color: var(--text-primary); background: var(--bg-input);
@@ -30,19 +52,9 @@
 .sel option { background: var(--bg-card); color: var(--text-primary); }
 .fi::placeholder { color: var(--text-tertiary); }
 
-/* ---------- 统计小方块 ---------- */
-.stat-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
-.stat-box {
-  flex: 1 1 150px; min-width: 140px; padding: 12px 14px; border-radius: var(--r);
-  border: 1px solid var(--border); background: var(--bg-card);
-}
-.stat-box .sb-num { font-size: 21px; font-weight: 600; letter-spacing: .2px; }
-.stat-box .sb-lab { font-size: 11.5px; color: var(--text-secondary); margin-top: 3px; }
-.stat-box.ok .sb-num { color: var(--green); }
-.stat-box.err .sb-num { color: var(--red); }
-.stat-box.warn .sb-num { color: var(--yellow); }
-.stat-box.mute .sb-num { color: var(--text-secondary); }
-.stat-box.accent .sb-num { color: var(--accent); }
+/* ---------- 统计小方块 ----------
+   ⚠️ 样式已统一归到文件末尾的「③ D1 版式层」，这里不再重复定义：
+      两处各写一份的后果是「改了一个，另一个还在生效」，最难查。 */
 
 /* ---------- 台账表格 ---------- */
 .td-r { text-align: right; font-variant-numeric: tabular-nums; }
@@ -64,12 +76,7 @@ tbody .tag { white-space: nowrap; }
 /* 表格里的勾选框：跟随当前主题强调色 */
 input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 
-/* ---------- 批量操作条 ---------- */
-.bulk-bar {
-  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
-  padding: 10px 12px; margin: 0 0 12px; border-radius: var(--r);
-  border: 1px dashed var(--border); background: var(--bg-input);
-}
+/* ---------- 批量操作条（样式见末尾「③ D1 版式层」） ---------- */
 .sel-count { font-size: 12.5px; color: var(--text-secondary); margin-right: 4px; }
 .sel-count b { color: var(--accent); }
 
@@ -106,9 +113,6 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 .agg-table tr:last-child td { border-bottom: none; }
 .agg-table td.name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agg-table tr.total-row td { font-weight: 600; border-top: 1px solid var(--border); }
-
-/* 统计页里上下两块之间留点气 */
-#page-stats .stat-row { margin-top: 0; margin-bottom: 4px; }
 
 /* ---------- 台账新列：凭证类型 / 行程明细 ---------- */
 .td-dash { color: var(--text-tertiary); }
@@ -201,11 +205,7 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 .btn-danger:hover { background: var(--red); color: #fff; border-color: var(--red); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 
-/* ---------- 台账查询条 ---------- */
-.filter-summary {
-  margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--border);
-  font-size: 12px; color: var(--text-secondary); line-height: 1.6;
-}
+/* ---------- 台账查询条（外框样式见末尾「③ D1 版式层」） ---------- */
 .filter-summary b { color: var(--accent); }
 .range-wrap { display: inline-flex; align-items: center; gap: 6px; }
 .range-tilde { color: var(--text-tertiary); font-size: 12px; }
@@ -435,6 +435,62 @@ tr.row-att td { background: var(--accent-subtle); }
 .usr-ops { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .usr-ops .fi { padding: 3px 6px; font-size: 12px; width: auto; }
 
+/* ---------- 任务中心（P0-4） ---------- */
+.nav-badge {
+  margin-left: auto; font-size: 10.5px; line-height: 1;
+  padding: 3px 6px; border-radius: 999px;
+  background: var(--accent); color: var(--text-on-accent);
+}
+.nav-badge[hidden] { display: none; }
+.nav-badge.is-err { background: var(--red); }
+.sb-nav.collapsed .nav-badge { display: none; }
+
+.job-stat { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.job-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-secondary);
+  padding: 6px 10px; border-radius: var(--r-sm);
+  border: 1px solid var(--border-subtle); background: var(--bg-card);
+}
+.job-chip b { font-size: 14px; color: var(--text-primary); }
+.job-chip.run { border-color: var(--accent); background: var(--accent-subtle); }
+.job-chip.run b { color: var(--accent-emphasis, var(--accent)); }
+.job-chip.ok b { color: var(--green); }
+.job-chip.err { border-color: var(--red); background: var(--red-subtle); }
+.job-chip.err b { color: var(--red); }
+
+.job-run {
+  padding: 10px 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--border-subtle); background: var(--bg-card);
+}
+.job-run + .job-run { margin-top: 8px; }
+.job-run-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.job-run-top b { font-size: 13px; }
+.job-bar {
+  height: 5px; margin: 8px 0 4px; border-radius: 999px;
+  background: var(--border-subtle); overflow: hidden;
+}
+.job-bar i { display: block; height: 100%; background: var(--accent); transition: width var(--transition); }
+
+.job-state {
+  font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+  background: var(--border-subtle); color: var(--text-secondary);
+}
+.job-state.run { background: var(--accent-subtle); color: var(--accent-emphasis, var(--accent)); }
+.job-state.ok { background: var(--green-subtle); color: var(--green); }
+.job-state.err { background: var(--red-subtle); color: var(--red); }
+.job-state.queue { background: var(--yellow-subtle); color: var(--yellow); }
+
+.job-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.job-tbl th {
+  text-align: left; white-space: nowrap; padding: 7px 9px; font-weight: 600;
+  color: var(--text-secondary); border-bottom: 1px solid var(--border);
+}
+.job-tbl td { padding: 6px 9px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+.job-tbl .nowrap { white-space: nowrap; color: var(--text-secondary); }
+.job-tbl .job-err { color: var(--red); max-width: 340px; }
+.job-tbl tr:hover td { background: var(--bg-card-hover); }
+
 /* ---------- 台账数据库信息 ---------- */
 .kv-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -522,3 +578,414 @@ tr.row-att td { background: var(--accent-subtle); }
 }
 .role-tbl td:first-child { white-space: nowrap; }
 .role-tbl tr:last-child td { border-bottom: none; }
+
+/* =====================================================================
+ * ③ D1 版式层 —— 深空冷光 · Financial Dashboard（2026-09-17 重构）
+ * ---------------------------------------------------------------------
+ * 起因：用户说「不好看，都是居左」「太平常了」，并同意重构。
+ *
+ * 依据 UI UX Pro Max 的设计搜索引擎（针对本项目：内部财务后台 / 桌面 Web 工具）：
+ *   风格：Financial Dashboard（财务仪表盘）
+ *         —— 主色是 profit/loss/neutral/trust，效果是「数字 + 趋势 + 涨跌色」，
+ *            Best For 写着「Financial reporting, accounting dashboards,
+ *            budget monitoring」
+ *   刻度：Dense / Dashboard（8/10）→ 间距一律走 8 的倍数
+ *   反模式：**Excessive decoration / Complex shadows / 3D effects** —— 一律不用
+ *   另一支照抄：Modern Dark 的变量刻度（近黑底 + 单一强调色 + 发丝边）
+ *
+ * 版式三原则（这一节就是它们的落地）：
+ *   ① 骨架 —— 一切锚在网格上，不再是「一堆元素各自贴着左边、右半边空着」
+ *   ② 层次 —— 用 1px 线分层，不用阴影；数字全部等宽，扫一眼就能比大小
+ *   ③ 密度 —— 行更矮、表头更小、留白更克制，一屏尽量多看几行
+ *
+ * 颜色全部走 style.css 的主题变量，4 套主题都跟着变。
+ * 这一节只改「怎么排」，不改「什么色」。
+ * ===================================================================== */
+
+/* ---------- ① 页面骨架：内容有边界，大屏不无限拉宽 ---------- */
+.main { padding: 20px 24px 64px; }
+.page { max-width: 1600px; margin: 0 auto; }
+
+.page-header {
+  align-items: flex-start; gap: 20px;
+  margin-bottom: 16px; padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.page-title { font-size: 19px; font-weight: 620; letter-spacing: -.1px; line-height: 1.3; }
+/* 说明文字限宽：长句铺满整行不好读（Readable text measure） */
+.page-sub { margin-top: 6px; line-height: 1.7; max-width: 960px; }
+.page-header .row-actions { flex: none; padding-top: 2px; }
+
+/* ---------- ② 卡片：头部独立成一条，正文和头部用发丝线分开 ---------- */
+.card { padding: 16px 20px 18px; margin-bottom: 14px; }
+.card-head {
+  align-items: flex-start; gap: 16px;
+  /* ⚠️ 原来这里是 space-between。加了折叠三角之后，卡头变成「标题 | 说明 | 三角」
+      三个 flex 项，space-between 会把说明推到正中间 —— 改成让说明自己
+      margin-left:auto 顶到右边，三角跟在它后面。 */
+  justify-content: flex-start;
+  margin-bottom: 14px; padding-bottom: 11px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.card-head:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+.card-title { font-size: 13.5px; line-height: 1.45; }
+.card-head .card-hint { flex: none; margin-left: auto; max-width: 56%; text-align: right; line-height: 1.6; }
+
+/* 说明文字提一档灰度：深色主题下 tertiary 对比度不够，本来就快看不清 */
+.card-hint, .empty { color: var(--text-secondary); }
+.empty { padding: 40px 24px; line-height: 1.8; }
+
+/* ---------- ③ 数字：等宽 + 右对齐 ----------
+   财务工具里「金额对不齐」比「不好看」严重得多 —— 等宽之后就成列了，扫一眼能比大小。 */
+.stat-box .sb-num, .job-chip b, .kv b, .tvr-idx, .td-idx, .alw-num {
+  font-variant-numeric: tabular-nums;
+}
+.td-r { font-family: var(--font-mono); font-size: 12px; }
+.modal-text b, .rep-total b { font-variant-numeric: tabular-nums; }
+
+/* ---------- ④ 指标带：一条带子把「多少钱、多少票」摆出来 ----------
+   做成「一条带 + 竖线分隔」而不是几张各自浮起的卡 —— 财务仪表盘的经典排法：
+   密度高、不散、不抢正文的注意力。 */
+.stat-row {
+  display: grid; gap: 0; margin: 0 0 14px;
+  grid-template-columns: repeat(auto-fit, minmax(146px, 1fr));
+  border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--bg-app); overflow: hidden;
+}
+.stat-box {
+  flex: none; min-width: 0; padding: 12px 16px;
+  border: 0; border-radius: 0; background: transparent;
+  border-right: 1px solid var(--border-subtle);
+}
+.stat-box:last-child { border-right: 0; }
+.stat-box .sb-num {
+  font-size: 21px; font-weight: 600; letter-spacing: -.2px;
+  line-height: 1.2; color: var(--text-primary);
+}
+.stat-box .sb-lab { font-size: 11.5px; color: var(--text-secondary); margin-top: 4px; }
+.stat-box.ok .sb-num { color: var(--green); }
+.stat-box.err .sb-num { color: var(--red); }
+.stat-box.warn .sb-num { color: var(--yellow); }
+.stat-box.mute .sb-num { color: var(--text-secondary); }
+.stat-box.accent .sb-num { color: var(--accent); }
+
+/* 表格里的指标带不占底部间距（它上面就是页头或卡头） */
+#page-stats .stat-row { margin-top: 0; }
+/* ⭐ 空的指标带必须整个藏掉：它自带一圈边框，没数据时会变成
+   「卡片里悬着一个空框」，比没有还难看（入库结果卡在没入库时就是这样）。 */
+.stat-row:empty { display: none; }
+
+/* ---------- ⑤ 表格：行更矮、表头更小，一屏多看几行 ---------- */
+.table-wrap { overflow-x: auto; }
+/* ⚠️ thead/tbody 的 padding 在 style.css 里统一给（9/8px 12px），这里不再覆盖，
+      免得两处各写一份、以后改一处忘一处。 */
+tbody tr:hover { background: var(--table-row-hover); }
+.tag { border-radius: 4px; font-size: 11px; padding: 1px 6px; }
+
+/* ---------- ⑥ 工具条 / 选择条 / 选项行 ---------- */
+/* 分段选择器用小圆角，和按钮同一套几何语言（D1 讲 geometric，不用药丸形） */
+.pill { border-radius: var(--r-sm); padding: 7px 14px; }
+.bulk-bar {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin: 0 0 12px; border-radius: var(--r);
+  padding: 10px 14px; border: 1px solid var(--border-subtle); background: var(--bg-app);
+}
+.opt-label { min-width: 72px; }
+.filter-summary {
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px; color: var(--text-secondary); line-height: 1.6;
+}
+
+/* ---------- ⑦ 侧栏：分组有节奏，激活项用「左侧色条 + 微底色」 ---------- */
+.sb-brand { padding: 14px 16px; border-bottom: 1px solid var(--border-subtle); }
+.sb-nav { padding: 8px; }
+.sb-group-header {
+  padding: 14px 12px 6px; font-size: 10.5px; letter-spacing: .6px;
+  text-transform: none;               /* 中文没有大小写，大写转换对中文是空操作 */
+}
+.nav-item { padding: 9px 12px; margin-bottom: 2px; }
+.nav-item.active { box-shadow: inset 3px 0 0 var(--sb-active-border); }
+
+/* ---------- ⑧ 设置页：单列 + 限宽 ----------
+   原来这里排两列，理由是「别一列到底留半页空白」。但卡片现在都能折叠了
+   （不常用的默认收成一条），两列反而排得参差不齐 —— 「出行人手机号对照」
+   那张是 card-wide 要占满整行，逼着上一行空出半格；
+   三张收起的卡并排两条细条，也不比一列更好看。
+   改回单列 + 限宽 1040，跟「凭证入库」页一个节奏。 */
+#page-set.active { display: block; max-width: 1040px; }
+
+/* ---------- ⑨ 检查清单补课（来源：UI UX Pro Max 的 Pre-Delivery Checklist） ---------- */
+/* 键盘 Tab 时要看得见焦点 —— 原来完全没有，纯键盘操作等于「看不见自己在哪」 */
+.btn:focus-visible,
+.fi:focus-visible,
+.sel:focus-visible,
+.path-input:focus-visible,
+.nav-item:focus-visible,
+.pill:focus-visible,
+.tb-btn:focus-visible,
+.theme-card:focus-visible,
+.usr-ops button:focus-visible,
+.sb-foot button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* 系统开了「减弱动效」就不要再动（前庭敏感的用户会难受） */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* ---------- ⑩ 窄屏：字段与指标带先塌成一列 ---------- */
+@media (max-width: 860px) {
+  .main { padding: 16px 14px 64px; }
+  .page-title { font-size: 17px; }
+  .stat-row { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+  .card { padding: 14px 15px 16px; }
+}
+
+/* =====================================================================
+ * ⑪ 报销作业页（「凭证台账」+「报销单」合并成一页）
+ * ---------------------------------------------------------------------
+ * 这一轮改的是**结构**，不是颜色（用户原话：要的是「里边东西的重构」）：
+ *   · 9 个筛选条件 → 面上只留「4 个视图胶囊 + 1 个搜索框」，其余收进「高级筛选」
+ *   · 13 列表格 → 7 列（「事项 / 行程」一格两行，把行程明细和销方并进去）
+ *   · 一张平表 → 按状态分组，组头带张数与金额（待报销在前、已报销在后）
+ *   · 出单区从单独一页搬到同一页底部，勾完往下滚就行，不再跨页勾选
+ * ===================================================================== */
+
+/* ---------- 作业条：视图胶囊 + 搜索 + 高级筛选 ---------- */
+.work-bar { padding: 14px 18px 12px; }
+.work-top { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.work-kw { flex: 1 1 240px; min-width: 180px; }
+#btn-adv .adv-caret {
+  margin-left: 6px; font-size: 10px; display: inline-block; transition: transform .15s;
+}
+#btn-adv.open .adv-caret { transform: rotate(180deg); }
+
+/* 高级筛选：收起时完全不占高度；展开后是紧凑网格 */
+.adv-panel {
+  display: grid; gap: 10px 14px; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  align-items: end;
+}
+.adv-panel .fi-label { font-size: 12px; }
+.adv-panel > .btn { justify-self: start; }
+
+/* ---------- 分组头：一眼看到「还有多少要报、多少钱」 ---------- */
+.grp-row td {
+  padding: 7px 12px; background: var(--table-header-bg);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.grp-row .grp-lab { font-size: 12px; font-weight: 500; }
+.grp-row .grp-meta {
+  margin-left: 10px; font-size: 12px; color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+.grp-row.grp-todo .grp-lab { color: var(--accent-emphasis); }
+
+/* ---------- 「事项 / 行程」：主行 + 副行，省掉两整列宽度 ---------- */
+.td-main { line-height: 1.45; }
+.td-sub {
+  font-size: 11.5px; color: var(--text-tertiary); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.row-no {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-tertiary); margin-right: 6px;
+}
+
+/* ---------- 出单区 ---------- */
+/* 这一条现在是 <button>：整条可点，收起 / 展开整组（规则见 ⑫ 卡片折叠） */
+.work-sec-title {
+  width: 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px;
+  margin: 4px 0 10px; padding: 7px 10px;
+  border: 0; border-left: 2px solid var(--accent-emphasis);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: transparent; color: inherit;
+  font-family: inherit; text-align: left; cursor: pointer;
+  transition: var(--transition);
+}
+.work-sec-title:hover { background: var(--bg-card-hover); }
+.work-sec-title .card-hint { margin-left: auto; text-align: right; }
+/* 这一条自己已经有左侧 2px 竖条了，标题再画一根就成双线 */
+.work-sec-title .card-title::before { display: none; }
+#work-panel.flash { animation: workflash .9s ease-out; }
+@keyframes workflash {
+  0%   { box-shadow: 0 0 0 2px var(--accent-emphasis); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+/* =====================================================================
+ * ⑫ 卡片折叠（2026-09-17）
+ * ---------------------------------------------------------------------
+ * 用户原话：「首先，这种的全都展开太多了，弄成可折叠的，就是 出报销单/合并发票
+ *           啊着一些的」。所以整页的卡都能收，出单区整组默认收着。
+ *
+ * 做法：卡头整条可点，右侧一个纯 CSS 画的小三角；正文靠 .card.collapsed 藏。
+ *   ① **不为折叠额外包一层 DOM** —— 包一层要动所有卡片的结构，DOM 桩测试和
+ *      回归断言都得跟着重写（原因写在 app.js 的折叠模块注释里）
+ *   ② 三角用 border 画，不引图标字体、不加 ::before 以外的元素
+ *   ③ 状态记 localStorage（app.js 的 LS.folds），刷新后还是你上次那个样子
+ * ===================================================================== */
+
+.card > .card-head {
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--r-sm);
+}
+.card > .card-head:hover .card-title { color: var(--accent); }
+
+/* 三角：展开时朝下，收起时朝右 */
+.card > .card-head::after {
+  content: ""; flex: none; align-self: center; margin-left: 2px;
+  width: 0; height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--text-tertiary);
+  transition: transform var(--transition);
+}
+.card > .card-head:hover::after { border-top-color: var(--accent); }
+.card.collapsed > .card-head::after { transform: rotate(-90deg); }
+
+/* 收起后只剩一条卡头：里面的分隔线收掉，下边距压小，一屏能多放几张 */
+.card.collapsed > *:not(.card-head) { display: none !important; }
+.card.collapsed { padding-bottom: 15px; }
+.card.collapsed > .card-head { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+
+/* 出单区：整组折叠（三个卡片一起收，不是一张一张折） */
+#work-panel.collapsed .fold-body { display: none; }
+.fold-tri {
+  flex: none; align-self: center; width: 0; height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--text-tertiary);
+  transition: transform var(--transition);
+}
+#work-panel.collapsed .fold-tri { transform: rotate(-90deg); }
+.work-sec-title:hover .fold-tri { border-top-color: var(--accent); }
+
+/* =====================================================================
+ * ⑬ 凭证入库页：别再横跨一整屏（2026-09-17）
+ * ---------------------------------------------------------------------
+ * 用户原话：「这排版还是不好看啊，比如凭证入库，这一行太长了啊，选择文件夹前边
+ *           那个路径留的框怎么那么长，就算很长的话隐藏不就好了，鼠标放上去自动显示」。
+ *
+ * 三个毛病对应三处修：
+ *   ① 卡片被拉到 1600px 满宽 → 入库页全是表单，限宽 1120
+ *   ② 路径框 flex:1 无限长 → 限宽 380 + 省略号；完整路径挂 title，悬停即见
+ *   ③ 输入框是生硬的方框 → 统一高度 / 圆角 / 悬停描边 / focus 光圈
+ * ===================================================================== */
+
+/* ① 入库页与设置页都是表单/配置，铺满整屏既难读也难对齐。
+      2026-09-17 二次收窄 1120 → 880：用户说「下边的（卡片）不能居中或者有什么
+      更好的调整吗」—— 病根不是没居中（.page 本来就有 margin:0 auto），而是
+      **卡片拉到 1120 宽、里面的控件只占左边 660，右边空掉一大片**。
+      表单页的正确做法是让栏宽贴着内容走，宁可整列窄一点、居中，也别宽卡+左堆。 */
+#page-in { max-width: 880px; }
+
+/* ② 路径框：不再抢满整行。整条路径太长时省略号截断，鼠标悬停出完整路径
+      （title 由 app.js 的 syncSrcPathTitle() 跟着值更新） */
+.src-row { justify-content: flex-start; }
+.path-input {
+  flex: 0 1 380px; width: 380px; max-width: 380px; min-width: 200px;
+  height: 34px; padding: 0 11px; border-radius: var(--r-sm);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px;
+}
+
+/* ③ 输入框统一外观：柔和描边 + 悬停加深 + focus 光圈，不再是一圈硬黑边框 */
+.fi, .sel, .path-input, .num-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
+}
+.fi:hover, .sel:hover, .path-input:hover { border-color: var(--border-strong, var(--border)); }
+.fi:focus, .sel:focus, .path-input:focus, .num-input:focus {
+  outline: none;
+  border-color: var(--border-focus, var(--accent));
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+  background: var(--bg-card);
+}
+.fi-label { font-weight: 500; }
+
+/* 入库页那两行「本批报销人 / 备注批次」——字段别跟着 filter-row 被拉平拉满，
+   两个窄字段并排就够，右边留白比「铺满一屏」好看 */
+#page-in .filter-row > .fi-label { flex: 0 0 auto; }
+#page-in .filter-row .fi { width: 176px !important; min-width: 0; }
+
+/* =====================================================================
+ * ⑭ 使用说明（说明书）：侧栏常驻入口 + 第一次进来自动弹一次
+ * ---------------------------------------------------------------------
+ * 用户原话：「能不能增加个说明，就是怎么操作这个东西，就是跟个说明书似的，
+ *          然后刚进来就是让阅读，可以关闭，然后可以在别的地方放着这个说明，
+ *          没看到可以再去那个地方看」。
+ *  → 三件事：① boot() 里首访自动弹（localStorage 记「读过了」，以后不再打扰）；
+ *            ② 弹层可关（确定/取消/点遮罩/ESC）；
+ *            ③ 入口留两个：侧栏底部「使用说明」+ 入库页副标题里的文字链。
+ * ===================================================================== */
+
+/* 正文里的小链接按钮（入库页副标题里的「使用说明」）——
+   <button> 默认是灰底方块，这里压成一行文字链接的样子 */
+.link-btn {
+  background: none; border: 0; padding: 0 2px; margin: 0;
+  font: inherit; color: var(--accent); cursor: pointer;
+  text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: var(--accent-subtle);
+}
+.link-btn:hover { text-decoration-color: var(--accent); }
+
+/* 说明书弹层：比明细弹层窄、比确认框宽 —— 单栏约 40 个汉字一行最好读 */
+.modal.modal-doc { width: 780px; max-width: 94vw; max-height: 86vh; overflow-y: auto; }
+
+.guide { line-height: 1.8; font-size: 13px; color: var(--text-primary); }
+.guide .g-lead {
+  margin: 0 0 14px; padding: 11px 14px; border-radius: var(--r-sm);
+  background: var(--accent-subtle); border-left: 3px solid var(--accent);
+}
+.guide .g-lead b { font-weight: 620; }
+
+/* 目录：一排可点的胶囊 */
+.g-toc { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 0 0 18px; }
+.g-toc button {
+  padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-input);
+  color: var(--text-secondary); font: inherit; font-size: 12px;
+  transition: var(--transition);
+}
+.g-toc button:hover { border-color: var(--accent); color: var(--accent); background: var(--bg-card); }
+.g-toc button .g-n { display: inline-block; min-width: 13px; margin-right: 5px; color: var(--accent); font-weight: 620; }
+
+/* 每一节 */
+.g-sec { padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+.g-sec + .g-sec { margin-top: 18px; }
+.g-sec h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; font-size: 14px; font-weight: 620; line-height: 1.5; }
+.g-sec h3 .g-n {
+  flex: none; width: 19px; height: 19px; border-radius: 5px;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+  line-height: 19px; text-align: center;
+}
+.g-sec p { margin: 6px 0; }
+.g-sec ol, .g-sec ul { margin: 6px 0; padding-left: 22px; }
+.g-sec li { margin: 4px 0; }
+.g-sec b { font-weight: 620; }
+
+/* 界面上真实的按钮名 / 字段名，用这种小标记出来，跟正文区分开 */
+.g-k {
+  padding: 1px 6px; border-radius: 4px; font-size: 12px; font-weight: 500;
+  background: var(--bg-input); border: 1px solid var(--border);
+  color: var(--text-primary); white-space: nowrap;
+}
+.g-tip {
+  margin: 8px 0 0; padding: 8px 12px; border-radius: var(--r-sm);
+  background: var(--bg-card-hover); border-left: 3px solid var(--border-strong);
+  color: var(--text-secondary); font-size: 12px;
+}
+.g-tip b { color: var(--text-primary); }
+.g-path { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }

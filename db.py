@@ -251,7 +251,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   started_at  TEXT    NOT NULL DEFAULT '',
   ended_at    TEXT    NOT NULL DEFAULT '',
   error       TEXT    NOT NULL DEFAULT '',
-  result_json TEXT
+  result_json TEXT,
+  -- 重试用的原始参数（JSON）。任务失败后点「重试」要能原样再跑一遍，
+  -- 所以参数必须跟着任务一起存下来 —— 只存 label 是不够的。
+  payload     TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS ix_jobs_state ON jobs(state);
 
@@ -289,10 +292,33 @@ def init(force: bool = False):
         conn = _open()
         try:
             conn.executescript(_SCHEMA)
+            _ensure_columns(conn)
             _ensure_unique_indexes(conn)
         finally:
             conn.close()
         _initialized_path = want
+
+
+def _ensure_columns(conn):
+    """老库升级：给已经存在的表补上新增的列。
+
+    为什么需要它：`CREATE TABLE IF NOT EXISTS` 对**已经存在**的表一个字都不改，
+    所以「上一版建的库」永远拿不到新列 —— 用户升级后会在某个接口上莫名其妙报
+    「no such column: payload」。这里按 PRAGMA 挨个比一遍，缺谁补谁（幂等）。
+    """
+    want = {
+        "jobs": [("payload", "TEXT NOT NULL DEFAULT ''")],
+    }
+    for table, cols in want.items():
+        try:
+            have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        except sqlite3.DatabaseError:
+            continue
+        if not have:                      # 表都还没建出来，_SCHEMA 会负责
+            continue
+        for name, decl in cols:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
 def _ensure_unique_indexes(conn):
@@ -627,14 +653,52 @@ JOB_QUEUED, JOB_RUNNING, JOB_DONE, JOB_FAILED, JOB_CANCELLED = \
     "排队", "运行中", "成功", "失败", "已取消"
 
 
-def job_create(kind: str, label: str = "", total: int = 0) -> str:
+def job_create(kind: str, label: str = "", total: int = 0, payload=None) -> str:
+    """建一条任务。payload ＝ 重试时要原样再传一遍的参数（dict/list，存 JSON）"""
     init()
     jid = secrets.token_hex(8)
+    pay = ""
+    if payload:
+        try:
+            pay = json.dumps(payload, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            pay = ""
     with write_tx() as conn:
-        conn.execute("INSERT INTO jobs(id, kind, state, total, done, label, username, created_at)"
-                     " VALUES(?,?,?,?,0,?,?,?)",
-                     (jid, kind, JOB_QUEUED, int(total), label or "", actor(), _now()))
+        conn.execute("INSERT INTO jobs(id, kind, state, total, done, label, username,"
+                     " created_at, payload) VALUES(?,?,?,?,0,?,?,?,?)",
+                     (jid, kind, JOB_QUEUED, int(total), label or "", actor(), _now(), pay))
     return jid
+
+
+def job_active(kind: str = "", mine_only: bool = False) -> list:
+    """还没跑完的任务（排队 + 运行中）。
+
+    两处用它：① 互斥 —— 同类任务已经在跑就别再起一个；② 界面显示「现在谁在跑什么」。
+    """
+    init()
+    sql = "SELECT * FROM jobs WHERE state IN (?, ?)"
+    vals = [JOB_QUEUED, JOB_RUNNING]
+    if kind:
+        sql += " AND kind = ?"
+        vals.append(kind)
+    if mine_only:
+        sql += " AND username = ?"
+        vals.append(actor())
+    sql += " ORDER BY created_at ASC, rowid ASC"
+    with read() as conn:
+        return [dict(r) for r in conn.execute(sql, vals).fetchall()]
+
+
+def job_retry_payload(jid: str):
+    """取回任务当初的参数（重试用）。拿不到就返回 None"""
+    r = job_get(jid)
+    raw = (r.get("payload") or "").strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return None
 
 
 def job_update(jid: str, **f):
@@ -715,13 +779,13 @@ ROLE_ALLOW = {
                 "make_report", "report_persons", "merge_invoices", "export_summary",
                 "list_outputs", "delete_output", "open_folder", "open_file", "reveal",
                 "upload_info", "get_paths", "get_config", "whoami", "ledger_db_info", "poll", "list_jobs",
-                "audit_list", "gen_files"},
+                "audit_list", "gen_files", "job_retry", "job_cancel"},
     "biz":     {"get_ledger", "mark_rows", "update_rows", "traveler_review",
                 "save_traveler_review", "get_phone_map", "set_phone_name",
                 "make_report", "report_persons", "merge_invoices", "export_summary",
                 "list_outputs", "open_folder", "open_file", "reveal", "upload_info",
                 "check_source", "start_import", "get_paths", "get_config", "whoami", "ledger_db_info", "poll",
-                "list_jobs", "gen_files"},
+                "list_jobs", "gen_files", "job_retry", "job_cancel"},
     "viewer":  {"get_ledger", "get_paths", "get_config", "whoami", "ledger_db_info", "poll", "list_outputs",
                 "gen_files"},
 }

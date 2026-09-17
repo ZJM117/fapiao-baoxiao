@@ -22,6 +22,7 @@
 """
 import functools
 import http.server
+import inspect
 import json
 import os
 import re
@@ -53,7 +54,30 @@ API_METHODS = {"poll", "whoami", "get_paths", "get_config", "set_config", "pick_
                "ledger_db_info", "import_from_excel", "audit_list", "list_jobs", "gen_files",
                "list_users", "create_user", "set_user_password", "set_user_role",
                "set_user_disabled", "force_logout",
-               "open_folder", "open_file", "reveal", "shutdown"}
+               "open_folder", "open_file", "reveal", "shutdown",
+               "job_retry", "job_cancel"}
+
+# 耗时写操作：解析原件、写台账、打印 PDF —— 全都不能两个人同时跑。
+# 以前只有「入库」有 busy 挡着，别的接口能被同时点：一个人在清空台账、另一个人在入库，
+# 两边都不报错，结果谁也说不清。这里把它们统一收进「重活锁」。
+HEAVY_JOBS = {"start_import", "refresh_rows", "make_report", "merge_invoices",
+              "export_summary", "import_from_excel", "clear_ledger"}
+# 真正要很久、必须异步跑（否则浏览器会等到超时）的：只有入库
+HEAVY_SPAWN = {"start_import"}
+# kind → 真正干活的函数名（没列出来的就是同名：接口方法本身就是干活的）。
+# 入库是个例外：start_import 只管「接活 + 起线程」，动手的是 _import_job。
+RETRY_IMPL = {"start_import": "_import_job"}
+
+# 任务名（界面上的中文说法）。kind 就是接口名，重试时才能原样找回方法。
+JOB_KINDS = {
+    "start_import": "入库建账",
+    "refresh_rows": "重新识别",
+    "make_report": "生成报销单",
+    "merge_invoices": "合并 PDF",
+    "export_summary": "导出统计",
+    "import_from_excel": "从 Excel 导入",
+    "clear_ledger": "清空台账",
+}
 
 _log_lock = threading.Lock()
 
@@ -430,6 +454,8 @@ class Api:
         self._cfg = load_config()
         self._last_output = []         # 最近生成的文件
         self.running = None
+        self._heavy = None             # 当前占着「重活锁」的任务（dict）；None ＝ 没人占用
+        self._heavy_lock = threading.Lock()
         self._boot_data()
 
     # ---------- 启动时的数据层准备 ----------
@@ -486,6 +512,185 @@ class Api:
 
     def _set_progress(self, on, cur=0, total=0, label=""):
         self._progress = {"on": bool(on), "cur": cur, "total": total, "label": label}
+        if on:
+            self._job_progress(cur, total)
+
+    # ---------- 后台任务：重活互斥 + 任务留痕（P0-4）----------
+    def _job_take(self, name, label, payload=None):
+        """抢「重活锁」并建一条任务。抢到返回 (任务号, "")；抢不到返回 (None, 为什么)。"""
+        with self._heavy_lock:
+            if self._heavy:
+                h = self._heavy
+                who = h.get("user") or "?"
+                return None, (f"「{h.get('label')}」正在执行（{who}），"
+                              f"请等它跑完再试")
+            jid = ""
+            try:
+                jid = db.job_create(name, label, payload=payload)
+            except Exception as e:                              # noqa: BLE001
+                # 任务表写不进去不该把功能整个卡死：照常跑，只是这次没留痕
+                _log_line(f"建任务失败：{type(e).__name__}: {e}")
+            self._heavy = {"id": jid, "kind": name, "label": label,
+                           "user": db.actor(), "at": time.time()}
+            self._job_id = jid
+        self.busy = True                # 界面靠它禁用按钮，所以同步接口也算「忙」
+        if jid:
+            try:
+                db.job_update(jid, state=db.JOB_RUNNING, started_at=db._now())
+            except Exception as e:                              # noqa: BLE001
+                _log_line(f"任务转运行中失败：{type(e).__name__}: {e}")
+        return jid, ""
+
+    def _job_release(self, jid):
+        with self._heavy_lock:
+            self._heavy = None
+        if getattr(self, "_job_id", "") == jid:
+            self._job_id = ""
+        self.busy = False
+
+    def _job_finish(self, jid, out, err=""):
+        """收尾：成功 / 失败都写回任务（含失败原因，失败的任务点「重试」能再来一次）"""
+        if not jid:
+            return
+        ok = not err and not (isinstance(out, dict) and out.get("error"))
+        if not ok and not err:
+            err = str(out.get("error") or "执行失败")
+        # 只留个摘要：入库结果里的明细清单可能有几百条，整份塞进任务表没意义
+        brief = None
+        if ok and isinstance(out, dict):
+            brief = {k: v for k, v in out.items()
+                     if k not in ("manual_list", "dup_list", "rows", "files", "all")}
+        try:
+            db.job_update(jid, state=db.JOB_DONE if ok else db.JOB_FAILED,
+                          ended_at=db._now(), error="" if ok else str(err)[:800],
+                          result_json=brief)
+        except Exception as e:                                  # noqa: BLE001
+            _log_line(f"写任务结果失败：{type(e).__name__}: {e}")
+
+    def _job_call(self, name, fn, args=(), kwargs=None, payload=None):
+        """耗时写操作的统一入口：抢锁 → 记任务 → 跑 → 收尾。
+
+        返回什么：同步接口直接返回它本来的结果；抢不到锁返回 {"error": ...}；
+        异步接口（入库）立刻返回 {"job": 任务号}。
+        """
+        label = JOB_KINDS.get(name, name)
+        if payload is None:
+            payload = self._job_payload(fn, args, kwargs)
+        if name in HEAVY_SPAWN:
+            return self._job_spawn(name, label, payload, fn, args=args, kwargs=kwargs)
+        jid, err = self._job_take(name, label, payload)
+        if err:
+            self._log(f"⏳ {err}")
+            return {"error": err, "busy": True}
+        try:
+            out = fn(*args, **(kwargs or {}))
+        except Exception as e:
+            self._job_finish(jid, None, f"{type(e).__name__}: {e}")
+            self._job_release(jid)
+            self._log(f"❌ {label} 失败：{type(e).__name__}: {e}")
+            raise
+        self._job_finish(jid, out)
+        self._job_release(jid)
+        return out
+
+    @staticmethod
+    def _job_payload(fn, args, kwargs):
+        """把这次调用的参数记下来 —— 失败后点「重试」要能原样再跑一遍"""
+        try:
+            bound = inspect.signature(fn).bind_partial(*(args or ()), **(kwargs or {}))
+            bound.apply_defaults()
+            return dict(bound.arguments)
+        except (TypeError, ValueError):
+            return {"args": list(args or []), "kwargs": dict(kwargs or {})}
+
+    def _job_spawn(self, name, label, payload, fn, args=(), kwargs=None):
+        """异步版（入库这种要跑几分钟的）。
+
+        ⚠️ 参数一定要在这里转交出去：早先写成 `fn()` 直接调用，等于把入库目录、
+        递归开关全丢了 —— 程序会拿配置文件里的旧默认值去扫，界面上写着 A 目录、
+        扫的却是 B 目录（「界面看见的必须等于程序在做的」正是这么破的）。
+
+        ⚠️ 还要先把「谁在操作」抓下来再起线程：后台线程里 contextvars 是**空的**
+        （实测 `db.actor()` 返回 ''），不显式带过去的话，入库写出来的每一行
+        created_by、审计里的 username 全是空白 —— 多人用了反而查不出「谁入的库」。
+        """
+        jid, err = self._job_take(name, label, payload)
+        if err:
+            self._log(f"⏳ {err}")
+            return {"error": err, "busy": True}
+        who = (db.actor(), db.client_ip(), db.role())
+        kw = dict(kwargs or {})
+
+        def runner():
+            db.set_actor(*who)
+            try:
+                out = fn(*args, **kw)
+            except Exception as e:                              # noqa: BLE001
+                self._job_finish(jid, None, f"{type(e).__name__}: {e}")
+                self._log(f"❌ {label} 失败：{type(e).__name__}: {e}")
+            else:
+                self._job_finish(jid, out)
+            finally:
+                self._job_release(jid)
+
+        threading.Thread(target=runner, daemon=True).start()
+        return {"job": jid, "started": True}
+
+    def _job_progress(self, cur, total):
+        """把进度同步进当前任务（供「任务」页看，重开界面也看得到跑到哪了）"""
+        jid = getattr(self, "_job_id", "")
+        if not jid:
+            return
+        try:
+            db.job_update(jid, done=int(cur or 0), total=int(total or 0))
+        except Exception:                                       # noqa: BLE001
+            pass
+
+    def job_retry(self, jid=""):
+        """重跑一个失败的任务（参数是当初记下来的那份）"""
+        j = db.job_get(jid)
+        if not j:
+            return {"error": "找不到这个任务"}
+        if j.get("state") in (db.JOB_QUEUED, db.JOB_RUNNING):
+            return {"error": "这个任务还在跑，不用重试"}
+        name = j.get("kind") or ""
+        if name not in HEAVY_JOBS:
+            return {"error": f"这个任务（{name or '未知'}）不支持重试"}
+        # 重试 ＝ 原样再跑一遍那个接口，所以权限要按**那个接口**再查一次：
+        # 只把 job_retry 这个名字放开是不够的，否则业务员能借重试去清空台账。
+        if not db.can(db.actor(), db.role(), name):
+            return {"error": f"当前身份不能重跑「{JOB_KINDS.get(name, name)}」"}
+        # ⚠️ 要拿**真正干活的那个函数**，不能拿接口外壳：外壳自己也要走任务层抢同一把锁，
+        #    于是抢不到、悄悄返回，任务被记成「成功」—— 界面看着好好的，其实什么都没做。
+        fn = getattr(self, RETRY_IMPL.get(name, name), None)
+        if not callable(fn):
+            return {"error": f"接口已不存在：{name}"}
+        payload = db.job_retry_payload(jid)
+        if payload is None:
+            return {"error": "这个任务没留下参数，重试不了（旧版本建的任务）"}
+        self._log(f"↻ 重试任务「{JOB_KINDS.get(name, name)}」（原任务 {jid}）")
+        if set(payload) == {"args", "kwargs"}:      # 参数签名拿不到时的兜底
+            return self._job_call(name, fn, args=payload["args"],
+                                  kwargs=payload["kwargs"], payload=payload)
+        return self._job_call(name, fn, kwargs=payload, payload=payload)
+
+    def job_cancel(self, jid=""):
+        """标记取消。
+
+        真正的取消没法把一个正在解析 PDF 的线程安全掐掉（硬杀会留下半截的台账写入），
+        所以这里只把「还在排队」的任务标掉；已经跑起来的老实等它跑完。
+        """
+        j = db.job_get(jid)
+        if not j:
+            return {"error": "找不到这个任务"}
+        if j.get("state") == db.JOB_QUEUED:
+            db.job_update(jid, state=db.JOB_CANCELLED, ended_at=db._now(),
+                          error="已取消")
+            self._log(f"⛔ 任务已取消：{j.get('label')}")
+            return {"ok": True, "cancelled": True}
+        if j.get("state") == db.JOB_RUNNING:
+            return {"error": "任务已经在跑了，取消不了（等它跑完）"}
+        return {"error": "这个任务已经结束了"}
 
     # ---------- 前端轮询 ----------
     def poll(self, since=0):
@@ -567,14 +772,34 @@ class Api:
 
     # ---------- 入库建账 ----------
     def start_import(self, recursive=None, category="", person="", batch="", source=""):
-        """source = 界面上那个路径框里的目录。**必须传**，见 _import_worker 里的说明。"""
+        """source = 界面上那个路径框里的目录。**必须传**，见 _import_worker 里的说明。
+
+        返回 True/False 是界面早就依赖的契约（False ＝ 没接上活），所以这里保持不动，
+        只是把真正干活的那一步交给任务层：抢锁、留痕、失败能重试。
+        """
         if self.busy:
             return False
-        self.busy = True
-        threading.Thread(target=self._import_worker,
-                         args=(recursive, category, person, batch, source),
-                         daemon=True).start()
+        payload = {"recursive": recursive, "category": category, "person": person,
+                   "batch": batch, "source": source}
+        res = self._job_call("start_import", self._import_job, kwargs=payload,
+                             payload=payload)
+        if isinstance(res, dict) and res.get("error"):
+            self._log(f"⏳ {res['error']}")
+            return False
         return True
+
+    def _import_job(self, recursive=None, category="", person="", batch="", source=""):
+        """入库任务的同步外壳：把 _import_worker 写回的结果转成任务结果。
+
+        为什么要这层：_import_worker 是把结果写进 self._result 给界面看的，它自己不
+        返回东西 —— 任务层就没法判断这次到底成功还是失败（失败会被记成「成功」，
+        那「失败可重试」就成了摆设）。
+        """
+        self._import_worker(recursive, category, person, batch, source)
+        r = self._result or {}
+        if r.get("error"):
+            return {"error": r["error"]}
+        return dict(r)
 
     def _import_worker(self, recursive, category, person, batch, source=""):
         try:
@@ -693,7 +918,8 @@ class Api:
             self._set_result({"error": f"{type(e).__name__}: {e}"})
         finally:
             self._set_progress(False)
-            self.busy = False
+            # self.busy 交给任务层收（_job_release）：在这里提前放开的话，
+            # 界面上按钮会先变成可点，其实锁还在人手上。
 
     # ---------- 台账 ----------
     def get_ledger(self, filt: dict = None):
@@ -1422,9 +1648,36 @@ class Api:
             return {"error": f"{type(e).__name__}: {e}"}
 
     def list_jobs(self, limit=50):
-        """后台任务列表（排队/运行中/成功/失败）"""
+        """后台任务列表（排队/运行中/成功/失败）+ 此刻占着重活锁的那个任务。
+
+        界面「任务」页就是照这个画的：谁在跑、跑到哪、失败的能不能重试。
+        """
         try:
-            return {"rows": db.job_list(limit=limit)}
+            rows = db.job_list(limit=limit)
+            today = datetime.now().strftime("%Y-%m-%d")
+            counts = {"running": 0, "queued": 0, "failed": 0, "done_today": 0}
+            for r in rows:
+                r["kind_cn"] = JOB_KINDS.get(r.get("kind") or "", r.get("kind") or "")
+                r["state"] = r.get("state") or ""
+                r["secs"] = round(_elapsed(r), 1)
+                r["retryable"] = bool(r.get("kind") in HEAVY_JOBS
+                                      and r["state"] == db.JOB_FAILED
+                                      and (r.get("payload") or ""))
+                r.pop("payload", None)       # 参数里可能有路径，不必发给界面
+                r.pop("result_json", None)
+                if r["state"] == db.JOB_RUNNING:
+                    counts["running"] += 1
+                elif r["state"] == db.JOB_QUEUED:
+                    counts["queued"] += 1
+                elif r["state"] == db.JOB_FAILED:
+                    counts["failed"] += 1
+                elif r["state"] == db.JOB_DONE and str(r.get("created_at", "")).startswith(today):
+                    counts["done_today"] += 1
+            cur = self._heavy or {}
+            return {"rows": rows, "counts": counts,
+                    "busy": bool(cur), "busy_label": cur.get("label", ""),
+                    "busy_user": cur.get("user", ""),
+                    "kinds": JOB_KINDS}
         except Exception as e:                                  # noqa: BLE001
             return {"error": f"{type(e).__name__}: {e}"}
 
@@ -1674,6 +1927,20 @@ def _human_size(n) -> str:
 
 # 这些后缀让浏览器直接看（PDF 内置阅读器、图片直接显示）；其余一律当下载
 _INLINE_EXT = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".txt", ".log"}
+
+
+def _elapsed(job: dict) -> float:
+    """任务耗时（秒）。正在跑的就算到此刻，没开始的记 0。"""
+    def _t(s):
+        try:
+            return datetime.strptime(str(s or ""), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+    a = _t(job.get("started_at")) or _t(job.get("created_at"))
+    if not a:
+        return 0.0
+    b = _t(job.get("ended_at")) or datetime.now()
+    return max(0.0, (b - a).total_seconds())
 
 
 def _dir_page(title: str, rows: list, up: str = "") -> str:
@@ -2087,7 +2354,12 @@ class UiHandler(http.server.SimpleHTTPRequestHandler):
         else:
             fn = getattr(self.api, name, None)
             try:
-                result = fn(*args) if callable(fn) else None
+                # 耗时写操作统一走任务层：抢重活锁（不让两个人同时改）、留痕、失败可重试。
+                # 入库那种自己就会起后台线程的（HEAVY_SPAWN）不再包一层，否则叠两次任务。
+                if callable(fn) and name in HEAVY_JOBS and name not in HEAVY_SPAWN:
+                    result = self.api._job_call(name, fn, args=tuple(args))
+                else:
+                    result = fn(*args) if callable(fn) else None
             except Exception as e:
                 error = f"{type(e).__name__}: {e}"
 

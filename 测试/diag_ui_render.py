@@ -68,20 +68,22 @@ def main():
     print("[1] JS 执行痕迹")
     ck("页面标题正确", "发票报销工具" in out)
     n_theme = out.count('class="theme-card"')
-    ck("12 张主题卡片已渲染", n_theme == 12, f"实际 {n_theme} 张")
+    ck("4 张主题卡片已渲染", n_theme == 4, f"实际 {n_theme} 张")
     n_swatch = out.count('class="theme-swatch"')
     # ⚠️ 别把带反斜杠的引号写进 f-string 的表达式里：Python 3.11 及更早会直接 SyntaxError
-    ck("主题卡片带预览色块", n_swatch == 36, f"{n_swatch} 个色块")
+    ck("主题卡片带预览色块", n_swatch == 12, f"{n_swatch} 个色块")
     ck("applyTheme 已生效（html 带 data-theme）", bool(re.search(r'<html[^>]*data-theme="', out)))
     ck("boot 已生效（body 带 native-frame）", 'class="native-frame"' in out)
     ck("日志已写入（boot 里的就绪提示）", "界面已就绪" in out,
        (re.search(r'id="log-count"[^>]*>([^<]*)<', out) or ["", "?"])[1])
 
     print("\n[2] 各页面结构")
-    for pid, label in [("page-in", "发票入库"), ("page-ledger", "发票台账"),
-                       ("page-report", "报销单"), ("page-stats", "统计汇总"),
+    # 「凭证台账」+「报销单」已在 2026-09-17 合并成「报销作业」（page-ledger）一页
+    for pid, label in [("page-in", "发票入库"), ("page-ledger", "报销作业"),
+                       ("page-stats", "统计汇总"), ("page-jobs", "任务中心"),
                        ("page-log", "运行记录"), ("page-set", "设置")]:
         ck(f"{label} 页存在", f'id="{pid}"' in out)
+    ck("合并后的作业页里有出单区", 'id="work-panel"' in out)
     ck("入库页是默认激活页", re.search(r'class="page active" id="page-in"', out) is not None)
     ck("导航项数量正确（6 个）", out.count('class="nav-item') >= 6)
 

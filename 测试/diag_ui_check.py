@@ -120,6 +120,32 @@ def main():
         if not hit:
             problems.append(label + " —— 这条前端契约没了")
 
+    # ---------- 6. 主题变量：颜色类必须四套齐全 ----------
+    # :root 装的是深色那一套（也是所有变量的底），浅色主题靠 [data-theme="…"] 覆盖。
+    # **只要漏写一条颜色变量，那条在浅色主题下就会漏出深色的值** ——
+    # 2026-09-17「凭证明细表头压着一条黑带」就是 --table-header-bg 漏写造成的
+    # （退回 :root 的 #0a1521）。这条断言专门拦它再次发生。
+    root_block = re.search(r':root\s*\{(.*?)\n\}', style, re.S).group(1)
+    root_vars = dict(re.findall(r'(--[\w-]+)\s*:\s*([^;]+);', root_block))
+    # 与主题无关的设计令牌（圆角 / 字体 / 间距 / 动效）、以及 var() 引用式变量，不要求每套重写
+    theme_indep = re.compile(r'^--(r|r-sm|r-lg|r-xl|font|font-mono|sp-|transition|glass-blur)')
+    color_keys = sorted(k for k, v in root_vars.items()
+                        if not theme_indep.match(k) and not v.strip().startswith('var('))
+    print(f"\n[6] 主题变量完整性：:root 共 {len(root_vars)} 条，其中「随主题变色」的 {len(color_keys)} 条")
+    print("    （:root = 深色；浅色主题只要漏一条，那条就会漏出深色值）")
+    # 只认「真的跟着 { 的」那种 [data-theme="…"]，注释里提到的不算
+    for name in sorted(set(re.findall(r'\[data-theme="([^"]+)"\]\s*\{', style))):
+        blk = re.search(r'\[data-theme="' + re.escape(name) + r'"\]\s*\{(.*?)\n\}', style, re.S)
+        have = set(re.findall(r'(--[\w-]+)\s*:', blk.group(1))) if blk else set()
+        miss = [k for k in color_keys if k not in have]
+        if miss:
+            problems.append(
+                f'[data-theme="{name}"] 漏了颜色变量 {miss} —— '
+                f"这几条在浅色主题下会漏出 :root 的深色值")
+            print(f"    ❌ {name}: 漏 {len(miss)} 条 -> {miss}")
+        else:
+            print(f"    ✅ {name}: {len(color_keys)} 条颜色变量齐全")
+
     print("\n" + "=" * 56)
     if problems:
         print("发现问题：")

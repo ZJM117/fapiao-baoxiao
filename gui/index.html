@@ -1,5 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<!-- data-theme 必须在这里就写死「light」：主题是 JS 在 boot() 里才套上的，
+     不写这一句就会先按 :root 的深色渲染一帧，再跳到浅色（闪一下白不白黑不黑）。
+     用户 2026-09-17 定的默认外观＝亮色清新。 -->
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <title>发票报销工具</title>
@@ -40,15 +43,11 @@
       </button>
       <button class="nav-item" data-page="page-ledger">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/>
+          <line x1="8" y1="17" x2="13" y2="17"/>
         </svg>
-        <span class="sb-text-wrap">凭证台账</span>
-      </button>
-      <button class="nav-item" data-page="page-report">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/>
-        </svg>
-        <span class="sb-text-wrap">报销单</span>
+        <span class="sb-text-wrap">报销作业</span>
       </button>
       <button class="nav-item" data-page="page-stats">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -57,6 +56,13 @@
         <span class="sb-text-wrap">统计汇总</span>
       </button>
       <div class="sb-group-header">系统</div>
+      <button class="nav-item" data-page="page-jobs">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/>
+        </svg>
+        <span class="sb-text-wrap">任务中心</span>
+        <span class="nav-badge" id="jobs-badge" hidden>0</span>
+      </button>
       <button class="nav-item" data-page="page-log">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>
@@ -72,6 +78,13 @@
     </nav>
 
     <div class="sb-foot">
+      <!-- 说明书入口：常驻在这儿，第一次进来还会自动弹一次（localStorage 记「看过了」） -->
+      <button id="btn-guide" title="使用说明 —— 第一次进来自动弹一次；以后忘了随时点这里">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;stroke:currentColor">
+          <circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        <span class="sb-text-wrap">使用说明</span>
+      </button>
       <div class="sb-user" id="sb-user" hidden>
         <div class="sb-user-who">
           <span class="sb-user-name" id="sb-user-name">—</span>
@@ -84,7 +97,7 @@
           <span class="sb-text-wrap">退出登录</span>
         </button>
       </div>
-      <button id="btn-theme" title="选择界面主题（12 套）">
+      <button id="btn-theme" title="选择界面主题（4 套）">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;stroke:currentColor">
           <circle cx="13.5" cy="6.5" r="1.4"/><circle cx="17.5" cy="10.5" r="1.4"/><circle cx="8.5" cy="7.5" r="1.4"/><circle cx="6.5" cy="12.5" r="1.4"/>
           <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.29-.29-.44-.65-.44-1.12a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.56-2.5 5.56-5.55C21.97 6.01 17.46 2 12 2z"/>
@@ -112,7 +125,8 @@
       <div class="page-header">
         <div>
           <div class="page-title">凭证入库建账</div>
-          <div class="page-sub">遍历你整理好的文件夹 → 解析发票（PDF / OFD / XML / zip）以及火车票 / 飞机行程单 / 打车行程单 / 登机牌 / 图片凭证 → 登记到 Excel 台账，同一张票自动查重</div>
+          <div class="page-sub">挑一个装着票的文件夹，点「开始入库」就行 —— 发票、火车票、行程单、登机牌都能读出来，同一张票不会重复入账。
+            <button type="button" class="link-btn" data-guide-open="1">使用说明</button></div>
         </div>
         <div class="status-badge ready" id="status">
           <span class="status-dot"></span><span id="status-text">就绪</span>
@@ -179,7 +193,9 @@
         </div>
       </div>
 
-      <div class="card">
+      <!-- data-fold="closed"：还没入库时它是空的，摆着也是白占地方；
+           入库一结束由 onImportResult() 自动展开 -->
+      <div class="card" data-fold="closed">
         <div class="card-head">
           <div class="card-title">入库结果</div>
           <div class="card-hint" id="in-hint">尚未入库</div>
@@ -200,12 +216,11 @@
       </div>
     </div>
 
-    <!-- ================= 发票台账 ================= -->
     <div class="page" id="page-ledger">
       <div class="page-header">
         <div>
-          <div class="page-title">凭证台账</div>
-          <div class="page-sub">多条件查询 → 勾选后批量标已报销 / 出报销单 / 合并 PDF；不需要的记录可以直接删掉；台账本身就是一个 Excel，可直接打开改</div>
+          <div class="page-title">报销作业</div>
+          <div class="page-sub">挑凭证 → 就在这一页填单 → 出 PDF / Excel。列表按状态分组、默认只显示最要紧的几列；点任意一行看它的全部字段</div>
         </div>
         <div class="row-actions">
           <button class="btn btn-sm" id="btn-export">导出统计 Excel</button>
@@ -213,8 +228,22 @@
         </div>
       </div>
 
-      <div class="card">
-        <div class="filter-row">
+      <!-- 作业条：面上只留 4 个视图 + 一个搜索框；原来的 9 个筛选条件收进「高级筛选」 -->
+      <div class="card work-bar">
+        <div class="work-top">
+          <div class="pill-group" id="view-pills">
+            <button class="pill active" data-view="all">全部</button>
+            <button class="pill" data-view="todo">待报销</button>
+            <button class="pill" data-view="done">已报销</button>
+            <button class="pill" data-view="risk">有风险</button>
+          </div>
+          <input class="fi work-kw" id="f-kw" type="text" spellcheck="false"
+                 placeholder="搜销方 / 项目 / 事由 / 发票号">
+          <button class="btn btn-sm" id="btn-adv" aria-expanded="false">高级筛选<span class="adv-caret">&#9662;</span></button>
+          <button class="btn btn-sm btn-primary" id="btn-refresh">查询</button>
+        </div>
+
+        <div class="adv-panel" id="adv-filter" hidden>
           <label class="fi-label">状态
             <select class="sel" id="f-status"><option value="">全部</option>
               <option value="未报销">未报销</option><option value="已报销">已报销</option></select>
@@ -241,24 +270,22 @@
               <input class="fi" id="f-max" type="text" placeholder="最大" style="width:76px">
             </span>
           </label>
-          <label class="fi-label">关键词
-            <input class="fi" id="f-kw" type="text" placeholder="发票号 / 销方 / 行程 / 项目" style="width:190px">
-          </label>
-          <button class="btn btn-primary" id="btn-refresh">查询</button>
-          <button class="btn btn-ghost" id="btn-reset-filter">清空条件</button>
+          <button class="btn btn-ghost btn-sm" id="btn-reset-filter">清空条件</button>
         </div>
         <div class="filter-summary" id="f-summary"></div>
       </div>
 
       <div class="card">
         <div class="card-head">
-          <div class="card-title">台账明细</div>
+          <div class="card-title">凭证明细</div>
           <div class="card-hint" id="ledger-hint">加载中…</div>
         </div>
         <div class="bulk-bar" id="bulk-bar">
           <span class="sel-count" id="sel-count">未选中</span>
           <button class="btn btn-sm" id="btn-sel-all">全选本页</button>
-          <button class="btn btn-sm btn-primary" id="btn-mark-done">标为已报销</button>
+          <span class="bulk-sep"></span>
+          <button class="btn btn-sm btn-primary" id="btn-to-report">生成报销单 &#8595;</button>
+          <button class="btn btn-sm" id="btn-mark-done">标为已报销</button>
           <button class="btn btn-sm" id="btn-mark-undone">标为未报销</button>
           <label class="fi-label" style="margin-left:8px">类别
             <select class="sel" id="set-category"><option value="">选类别</option></select>
@@ -269,10 +296,9 @@
           <button class="btn btn-sm" id="btn-review-tv"
                   title="把整本台账的出行人过一遍：票面读到的、手机号译出的、文件夹推来的摆在一起，逐条确认或改掉；确认过的就不再提醒">出行人核对<span
                   class="tv-badge" id="tv-todo-badge" hidden>0</span></button>
-          <button class="btn btn-sm btn-primary" id="btn-to-report">生成报销单 →</button>
-          <span class="bulk-sep"></span>
           <button class="btn btn-sm" id="btn-reparse"
                   title="按最新的识别规则重读选中凭证的原件，刷新票面字段（状态/类别/报销人不动）">重新识别</button>
+          <span class="bulk-sep"></span>
           <button class="btn btn-sm btn-danger" id="btn-del-sel">删除选中</button>
           <button class="btn btn-sm btn-danger" id="btn-clear-ledger">清空台账</button>
         </div>
@@ -280,33 +306,31 @@
           <table>
             <thead><tr>
               <th style="width:34px"><input type="checkbox" id="ck-all"></th>
-              <th class="td-idx">#</th><th style="width:86px">状态</th>
-              <th style="width:92px">凭证类型</th>
+              <th style="width:104px">状态</th>
+              <th style="width:88px">开票日期</th>
+              <th style="width:150px">凭证类型</th>
+              <th>事项 / 行程</th>
               <th style="width:84px">出行人</th>
-              <th style="width:92px">开票日期</th><th style="width:170px">发票号码</th>
-              <th style="min-width:250px">行程 / 明细</th>
-              <th style="width:180px">销方名称</th>
-              <th style="min-width:170px">项目 / 事由</th>
-              <th style="width:96px">费用类别</th>
-              <th style="width:100px" class="td-r">价税合计</th>
-              <th style="width:110px">报销批次</th>
+              <th style="width:104px" class="td-r">金额</th>
             </tr></thead>
             <tbody id="ledger-body">
-              <tr><td colspan="13" class="empty">还没有台账数据，先去「凭证入库」建账</td></tr>
+              <tr><td colspan="7" class="empty">还没有台账数据，先去「凭证入库」建账</td></tr>
             </tbody>
           </table>
         </div>
       </div>
-    </div>
 
-    <!-- ================= 报销单 ================= -->
-    <div class="page" id="page-report">
-      <div class="page-header">
-        <div>
-          <div class="page-title">出报销单 / 合并发票</div>
-          <div class="page-sub">在「凭证台账」里勾选凭证后过来填参数，一键生成可打印的<b>费用报销单 / 差旅费报销单 / 出差报销明细（模板二）</b>，PDF 与 Excel 两种格式随便挑</div>
-        </div>
-      </div>
+      <!-- 出单区：原来是单独一页，现在跟着列表走，勾完直接往下填，不用跳页。
+           整组**默认收起**（用户：全都展开太多了）—— 点这一条标题展开，
+           或者在上面勾完凭证点「生成报销单 ↓」时由 focusWorkPanel() 自动展开。 -->
+      <div id="work-panel" data-fold="closed">
+        <button class="work-sec-title" id="work-panel-head" type="button"
+                aria-expanded="false" aria-controls="work-panel-body">
+          <span class="fold-tri" aria-hidden="true"></span>
+          <span class="card-title">出报销单 / 合并发票</span>
+          <span class="card-hint" id="work-panel-hint">点这里展开 —— 上面勾好的凭证在下面第一张表里；填完参数点生成，PDF 与 Excel 随便挑</span>
+        </button>
+        <div class="fold-body" id="work-panel-body">
 
       <div class="card">
         <div class="card-head">
@@ -366,7 +390,8 @@
           <label class="alw-head">
             <input type="checkbox" id="r-alw-on">
             <span class="alw-title">计入差旅费补助</span>
-            <span class="alw-hint">出差补助（伙食 / 市内交通 / 杂费等），按「人数 × 天数 × 标准」算，数额自己填</span>
+            <span class="alw-hint">出差补助（伙食 / 市内交通 / 杂费等），按「人数 × 天数 × 标准」算，数额自己填
+              —— 每次做单都从空开始，不会带上次的</span>
           </label>
           <div class="alw-box" id="alw-box" hidden>
             <table class="alw-table">
@@ -382,6 +407,8 @@
             </table>
             <div class="alw-foot">
               <button class="btn btn-sm" id="btn-alw-add" type="button">+ 加一行</button>
+              <button class="btn btn-sm btn-danger" id="btn-alw-clear" type="button"
+                      title="把这几行补助清干净（勾选也一并取消）。生成报销单成功后会自动清一次">清空</button>
               <span class="alw-sum">差旅费补助合计：<b id="alw-sum">¥0.00</b></span>
               <span class="alw-grand" id="alw-grand"></span>
             </div>
@@ -393,7 +420,8 @@
           <div class="alw-head" style="cursor:default">
             <span class="alw-title">出差补助（按人）</span>
             <span class="alw-hint">模板二的版式是「每人一行」：<b>票据合计</b>按出行人自动算，
-              <b>补助金额</b>自己填，<b>实际</b>＝票据合计＋补助。全填 0 就等于不出这块</span>
+              <b>补助金额</b>自己填，<b>实际</b>＝票据合计＋补助。全填 0 就等于不出这块。
+              名单只按<b>这次</b>勾选的凭证来，不会带上次的人</span>
           </div>
           <div class="alw-box" id="jy-box" hidden>
             <table class="alw-table">
@@ -414,6 +442,8 @@
                 <span class="alw-hint" style="margin:0 4px">天 ×</span>
                 <input class="fi" id="jy-rate" type="number" min="0" step="10" style="width:84px" placeholder="元/人·天">
                 <button class="btn btn-sm" id="btn-jy-fill" type="button" style="margin-left:6px">预填到每人</button>
+                <button class="btn btn-sm btn-danger" id="btn-jy-clear" type="button" style="margin-left:6px"
+                        title="把已填的补助金额全部清零（名单保留）。生成报销单成功后会自动清一次">清空金额</button>
               </span>
             </div>
           </div>
@@ -443,6 +473,8 @@
         </div>
         <div class="out-list" id="out-list"><div class="empty" style="padding:14px 4px">还没有生成文件</div></div>
       </div>
+        </div><!-- /fold-body 出单区正文 -->
+      </div><!-- /work-panel -->
     </div>
 
     <!-- ================= 统计汇总 ================= -->
@@ -475,6 +507,36 @@
       <div class="card">
         <div class="card-head"><div class="card-title">日志输出</div><div class="card-hint" id="log-hint">实时</div></div>
         <div class="log-body" id="log-full" style="height:392px;border-radius:var(--r);border:1px solid var(--border)"></div>
+      </div>
+    </div>
+
+    <!-- ================= 任务中心 ================= -->
+    <div class="page" id="page-jobs">
+      <div class="page-header">
+        <div>
+          <div class="page-title">任务中心</div>
+          <div class="page-sub">解析、入库、出单这些都算「任务」——谁在跑、跑到哪、失败的点一下就能重来</div>
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-sm" id="btn-jobs-refresh">刷新</button>
+        </div>
+      </div>
+
+      <div class="card" id="job-running-card">
+        <div class="card-head">
+          <div class="card-title">正在执行</div>
+          <div class="card-hint" id="job-running-hint">没有任务在跑</div>
+        </div>
+        <div id="job-running-body"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">最近任务</div>
+          <div class="card-hint">最多显示最近 50 条；失败的任务可以直接重试</div>
+        </div>
+        <div class="job-stat" id="job-stat"></div>
+        <div id="job-list"></div>
       </div>
     </div>
 
@@ -541,7 +603,9 @@
           <button class="btn btn-primary" id="btn-save-cfg">保存设置</button>
         </div>
       </div>
-      <div class="card">
+      <!-- card-wide：设置页宽屏是两列，这张要占满整行（对照表是长文本，挤半栏没法用）
+           data-fold="closed"：设置页卡片多，不常用的先收起来，点卡头展开 -->
+      <div class="card card-wide" data-fold="closed">
         <div class="card-head">
           <div class="card-title">出行人手机号对照</div>
           <div class="card-hint">打车行程单票面上只有手机号、没有姓名，靠这张表翻成人名</div>
@@ -558,7 +622,7 @@
           <button class="btn" id="btn-reload-pmap">重新载入</button>
         </div>
       </div>
-      <div class="card">
+      <div class="card" data-fold="closed">
         <div class="card-head">
           <div class="card-title">台账数据库</div>
           <div class="card-hint">台账的真身是数据库；发票台账.xlsx 现在只是导出的快照</div>
@@ -571,7 +635,7 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" data-fold="closed">
         <div class="card-head"><div class="card-title">目录信息</div><div class="card-hint">只读</div></div>
         <div id="path-info"></div>
       </div>
@@ -582,7 +646,7 @@
 <div class="theme-pop" id="theme-pop">
   <div class="theme-pop-head">
     <span>主题外观</span>
-    <span class="card-hint">12 套 · 点选即生效</span>
+    <span class="card-hint">4 套 · 点选即生效</span>
   </div>
   <div class="theme-grid" id="theme-grid"></div>
 </div>
