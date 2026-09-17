@@ -235,7 +235,27 @@ git add . && git commit -m "改了 xxx" && git push
 ## 常见问题
 
 **拉不到镜像 / `unauthorized`**
-镜像是私有的，先在 NAS 上 `docker login ghcr.io`（密码用勾了 `read:packages` 的 GitHub Token）。另外 **ghcr 路径必须全小写**：`ghcr.io/zjm117/...`。
+镜像是私有的，NAS 必须先登录一次。按这个顺序排查：
+
+```bash
+whoami                                  # ① 记住你现在是哪个用户（root 还是别人）
+docker logout ghcr.io                   # ② 清掉可能残留的错误凭据
+echo '你的Token' | docker login ghcr.io -u ZJM117 --password-stdin
+                                        # ③ 看到 Login Succeeded 才算过
+docker pull ghcr.io/zjm117/fapiao-baoxiao:latest
+```
+
+报错文案能直接区分原因：
+
+| 报错里出现 | 含义 | 怎么办 |
+|---|---|---|
+| `unauthorized` / `authentication required` | **根本没带凭据**（匿名请求） | 十有八九是「登录的用户」和「执行 docker 的用户」不是同一个人：登录的用户凭据存在 `~/.docker/config.json`，用 `sudo` 或 `su root` 后读的是 `/root/.docker/config.json`。**在同一个用户下重新 `docker login`。** |
+| `denied` / `permission_denied` / `does not match expected scopes` | 凭据带了，但**Token 权限不够** | 重新建一个 classic Token，勾上 **`read:packages`**，再登录。 |
+
+> 生成 Token 的直链（已预勾 `read:packages`）：<https://github.com/settings/tokens/new?scopes=read:packages&description=nas-pull>
+> 必须用 classic Token（`ghp_…`）。设备码 / OAuth 令牌（`gho_…`）即使是本人账号，**拉私有镜像也会被拒**。
+
+另外 **ghcr 路径必须全小写**：`ghcr.io/zjm117/...`（用户名 `ZJM117` 带大写，镜像路径里要小写）。
 
 **页面上显示的时间差 8 小时**
 compose 里的 `TZ: "Asia/Shanghai"` 丢了，加回去重建容器。
