@@ -132,6 +132,8 @@ def make_ledger_excel(path: Path, n: int = N_ROWS):
         wb0 = openpyxl.load_workbook(src, read_only=True)
         hdr = [c.value for c in next(wb0.active.iter_rows(min_row=1, max_row=1))]
         wb0.close()
+    else:
+        hdr = ["序号", "状态", "凭证类型", "发票号码", "开票日期", "价税合计"]
     if not hdr or not any(hdr):
         raise RuntimeError(f"拿不到台账表头：{src}")
     wb = openpyxl.Workbook()

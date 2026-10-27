@@ -54,28 +54,25 @@
 
 ```yaml
     environment:
-      FB_PASSWORD: "change-me"     # ← ① 改成你自己的口令（管理员口令）
+      FB_PASSWORD: "${FB_PASSWORD:?Set FB_PASSWORD in the adjacent .env file}"
     volumes:
       - ./data:/data               # 台账/配置/输出 都在这（不用改）
       - ./票据:/票据               # ② 把你的票据文件夹挂到这里
 ```
 
-> ⚠️ **如果你的 compose 里是 `FB_PASSWORD: "${FB_PASSWORD}"` 这种写法**（NAS 图形界面「新建项目」
-> 常这么生成），那它只是个**占位符**，值要去**同一个目录的 `.env` 文件**取：
+> 在 `docker-compose.yml` 同目录创建 `.env`，填入你自己的口令：
 >
 > ```bash
 > cd /volume1/docker/fapiao
-> printf 'FB_PASSWORD=你的新口令\n' > .env
+> printf 'FB_PASSWORD=替换成你自己的长口令\n' > .env
 > docker compose up -d
-> docker compose config | grep -i FB_PASSWORD   # 确认解析出来不是空的
 > ```
 >
-> `.env` 里没这个变量时，compose 当**空字符串**处理 → 程序「口令为空 = 不用登录、谁都是管理员」。
-> 嫌麻烦就把那行直接改回字面值 `FB_PASSWORD: "你的口令"`，不用 `.env`。
+> `.env` 已加入 `.gitignore`。不要分享包含实际口令的 `docker compose config` 输出。
+> 没配置口令时 Compose 会直接报错；程序也会拒绝空口令和 `change-me` 示例口令。
 
-- **口令**：`FB_PASSWORD`。它一次干三件事：**第一次启动自动创建管理员账号时用的初始密码**、
-  **管理员自己的备用登录方式**、以及没账号时的门槛。留空 = 谁打开都不用登录 ——
-  只在完全可信的内网才这么干。第一次启动后登录页上是这样：
+- **口令**：服务器模式必须配置自定义 `FB_PASSWORD`，不能留空或使用 `change-me`。它一次干三件事：**第一次启动自动创建管理员账号时用的初始密码**、
+  **管理员自己的备用登录方式**、以及没账号时的门槛。第一次启动后登录页上是这样：
   - 用户名 `admin` + 这个口令 → 管理员登录（推荐，审计里记的就是 `admin`）
   - 只填口令、用户名留空 → 也能进，身份记为「口令用户」，一样是管理员权限
   - 进去之后在「**设置 → 账号与权限**」给同事开各自的账号，他们就不必知道这个口令了
@@ -191,8 +188,7 @@ http://192.168.x.x:8766
 compose 里的 `TZ: "Asia/Shanghai"` 被改掉了，加回去重建。
 
 **忘了口令**
-改 `docker-compose.yml` 里的 `FB_PASSWORD`，然后 `docker compose up -d`（会重建容器，数据不动）。
-（如果那行写的是 `${FB_PASSWORD}` 占位符，就去改**同目录的 `.env`**，改完同样 `docker compose up -d`。）
+改同目录 `.env` 里的 `FB_PASSWORD`，然后 `docker compose up -d`（会重建容器，数据不动）。
 ⚠️ 这只影响「访问口令」这条路；各人账号的密码存在数据库里，不受它影响。
 要是**管理员账号的密码**也忘了：登录时**用户名留空、只填访问口令**就能进去，再在设置页改回来。
 

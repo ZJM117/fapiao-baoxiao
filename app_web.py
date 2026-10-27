@@ -2107,6 +2107,17 @@ def _auth_on() -> bool:
     return bool(_cur_password())
 
 
+def _server_security_error() -> str:
+    if not SERVER_MODE:
+        return ""
+    password = _cur_password()
+    if not password:
+        return "服务器模式必须设置访问口令；请配置 FB_PASSWORD 或设置页口令"
+    if password.casefold() == "change-me":
+        return "服务器模式不能使用示例口令 change-me；请配置你自己的 FB_PASSWORD"
+    return ""
+
+
 # 已登录的会话：令牌 → 是谁。只放内存 —— 容器重启后要重新登录（不用管过期）。
 _SESSIONS = {}
 
@@ -2695,6 +2706,12 @@ def _open_browser(url: str) -> bool:
 
 
 def main():
+    security_error = _server_security_error()
+    if security_error:
+        _log_line(f"❌ 启动失败：{security_error}")
+        _safe_print(f"[启动失败] {security_error}")
+        return 1
+
     _log_line("=" * 40)
     _log_line(f"启动：exe={getattr(sys, 'frozen', False)} 界面目录={GUI_DIR}")
     _log_line(f"运行模式：{'服务器（Docker/NAS）' if SERVER_MODE else '本机'}"

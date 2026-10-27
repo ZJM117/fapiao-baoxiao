@@ -259,6 +259,35 @@ chk(app_paths.PASSWORD == "", "不设 → 没有口令")
 chk(app_web._auth_on() is False, "本机模式不启用登录校验")
 chk(app_web.UI_PORT == 8766, "UI_PORT 仍取 8766", app_web.UI_PORT)
 
+print("\n— ⑤ 服务器模式口令必须安全配置 —")
+original_server_mode = app_web.SERVER_MODE
+original_password = app_web.PASSWORD
+original_load_config = app_web.load_config
+original_log_line = app_web._log_line
+original_safe_print = app_web._safe_print
+app_web.SERVER_MODE = True
+app_web.load_config = lambda: {}
+app_web._log_line = lambda *_: None
+app_web._safe_print = lambda *_: None
+app_web.PASSWORD = ""
+chk(bool(app_web._server_security_error()), "服务器模式拒绝空口令")
+chk(app_web.main() == 1, "空口令导致服务器启动提前失败")
+app_web.PASSWORD = "change-me"
+chk(bool(app_web._server_security_error()), "服务器模式拒绝示例默认口令")
+app_web.PASSWORD = "custom-password-123"
+chk(app_web._server_security_error() == "", "服务器模式接受自定义口令")
+app_web.PASSWORD = ""
+app_web.load_config = lambda: {"web_password": "configured-password-123"}
+chk(app_web._server_security_error() == "", "服务器模式接受设置页保存的自定义口令")
+app_web.SERVER_MODE = False
+app_web.PASSWORD = ""
+chk(app_web._server_security_error() == "", "本机模式不受服务器口令检查影响")
+app_web.SERVER_MODE = original_server_mode
+app_web.PASSWORD = original_password
+app_web.load_config = original_load_config
+app_web._log_line = original_log_line
+app_web._safe_print = original_safe_print
+
 srv = app_web.start_server(app_web.Api(), app_paths.GUI_DIR, 0)
 port2 = srv.server_address[1]
 host2 = srv.server_address[0]
@@ -298,6 +327,8 @@ if DOCKERFILE.exists():
 if COMPOSE.exists():
     cp = COMPOSE.read_text(encoding="utf-8")
     chk("FB_PASSWORD" in cp, "compose 里留了口令这一项")
+    chk("${FB_PASSWORD:?" in cp and "change-me" not in cp,
+        "compose 要求配置口令且不含示例默认口令")
     chk("8766:8766" in cp, "端口映射 8766")
     chk("/data" in cp and "/票据" in cp, "两个卷都挂上了（数据 + 票据）")
     chk("restart:" in cp, "配了自动重启")

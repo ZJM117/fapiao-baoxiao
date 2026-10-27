@@ -14,7 +14,7 @@
   FB_PORT         监听端口（默认 8766）
   FB_DATA_DIR     数据目录：台账/配置/缓存/输出/回收站都放这儿
   FB_SOURCE       票据文件夹（容器里通常挂到 /票据）
-  FB_PASSWORD     访问口令，留空=不校验（局域网直接进）
+  FB_PASSWORD     访问口令；服务器模式必须配置自定义口令
   FB_CHROME       Chromium/Edge 可执行文件（打印 PDF 用，自动找得到就不用设）
 """
 import os
@@ -80,7 +80,7 @@ try:
     PORT = int(_env("FB_PORT", "8766"))
 except ValueError:
     PORT = 8766
-PASSWORD = _env("FB_PASSWORD")          # 非空才启用登录校验
+PASSWORD = _env("FB_PASSWORD")          # 本机模式可留空；服务器模式启动时会校验
 
 
 # ---------- 界面 ----------

@@ -86,8 +86,8 @@ services:
       FB_PORT: "8766"
       FB_DATA_DIR: "/data"
       FB_SOURCE: "/票据"
-      # ↓↓↓ 改成你自己的口令：管理员初始密码 + 无账号时的登录门槛
-      FB_PASSWORD: "change-me"
+      # 口令从同目录的 .env 读取；不要把真实口令提交到 Git
+      FB_PASSWORD: "${FB_PASSWORD:?Set FB_PASSWORD in the adjacent .env file}"
       TZ: "Asia/Shanghai"
     volumes:
       # 台账 / 配置 / 输出 / 备份 / 缓存都在这里，别删
@@ -96,22 +96,16 @@ services:
       - ./票据:/票据
 ```
 
-> **口令那行要不要写死？** 上面 `FB_PASSWORD: "change-me"` 是直接写字面值，最简单，推荐。
-> 如果你的 compose 里是被改成 `FB_PASSWORD: "${FB_PASSWORD}"` 这种写法（NAS 图形界面「新建项目」
-> 常常这么生成），那它就是个**占位符**，值要去**同一个目录下的 `.env` 文件**里找：
+在 `docker-compose.yml` 同目录创建 `.env`，填入你自己的口令：
 >
 > ```bash
 > cd /volume1/docker/fapiao
-> printf 'FB_PASSWORD=你的新口令\n' > .env    # 必须是这个目录、这个文件名
-> docker compose up -d                          # 环境变量只在启动时读，要重建容器
+> printf 'FB_PASSWORD=替换成你自己的长口令\n' > .env
+> docker compose up -d
 > ```
 >
-> ⚠️ **`.env` 里没写这个变量时，compose 会把它当空字符串** —— 而本程序「口令为空 = 不要登录，
-> 谁打开都是管理员」。部署完先确认一下：
->
-> ```bash
-> docker compose config | grep -i FB_PASSWORD   # 看解析出来的实际值，别是空的
-> ```
+> `.env` 已加入 `.gitignore`。不要分享包含实际口令的 `docker compose config` 输出。
+> 没有配置口令时，Compose 会直接报错；服务器程序也会拒绝空口令和 `change-me` 示例口令。
 
 #### 3. 登录镜像仓库（私有镜像只需一次）
 
@@ -184,7 +178,7 @@ docker push 你的仓库/fapiao-baoxiao:latest
 | `FB_PORT` | `8766` | 监听端口 |
 | `FB_DATA_DIR` | 程序目录 | 数据目录：台账、配置、缓存、输出、回收站、备份都在这 |
 | `FB_SOURCE` | 程序目录 | 默认票据文件夹（容器里通常挂到 `/票据`） |
-| `FB_PASSWORD` | 空 | 访问口令。**首次启动会用它建管理员账号 `admin`**；也可用于「用户名留空 + 只填口令」的兜底登录。留空 = 不要登录（只在完全可信的内网这么干） |
+| `FB_PASSWORD` | 空 | 本机模式可留空；服务器模式必须配置非空且不是 `change-me` 的自定义口令。首次启动会用它建管理员账号 `admin`，也可用于「用户名留空 + 只填口令」的兜底登录 |
 | `FB_CHROME` | 自动查找 | Chromium / Edge 可执行文件（打印报销单 PDF 用） |
 | `TZ` | 系统时区 | 容器时区，填 `Asia/Shanghai` 否则单据时间差 8 小时 |
 
@@ -288,8 +282,7 @@ compose 里的 `TZ: "Asia/Shanghai"` 丢了，加回去重建容器。
 镜像里缺 Chromium 或中文字体（打印 PDF 靠它）。本仓库的 Dockerfile 已经装好了，自己改过的话确认 `chromium` 和 `fonts-noto-cjk` 还在，然后重新构建。
 
 **忘了口令 / 忘了管理员密码**
-改 `docker-compose.yml` 里的 `FB_PASSWORD` 再 `docker compose up -d`（数据不动）。
-（那行若写成 `${FB_PASSWORD}` 占位符，就去改**同目录的 `.env`**。）
+改同目录 `.env` 里的 `FB_PASSWORD` 再执行 `docker compose up -d`（数据不动）。
 ⚠️ 这只影响「访问口令」这条路；各人账号密码存在数据库里，不受影响。
 **管理员密码也忘了**：登录时**用户名留空、只填访问口令**就能进去，再在设置页改回来。
 

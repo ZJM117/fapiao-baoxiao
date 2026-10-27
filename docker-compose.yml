@@ -31,8 +31,8 @@ services:
       FB_PORT: "8766"
       FB_DATA_DIR: "/data"
       FB_SOURCE: "/票据"
-      # ⚠️ 改成你自己的口令。留空字符串=不需要登录（只在完全可信的内网这么干）
-      FB_PASSWORD: "change-me"
+      # 必须在同目录 .env 中设置 FB_PASSWORD；服务端拒绝空口令和示例默认口令
+      FB_PASSWORD: "${FB_PASSWORD:?Set FB_PASSWORD in the adjacent .env file}"
       TZ: "Asia/Shanghai"
     volumes:
       # 台账 / 配置 / 缓存 / 输出 / 回收站都在这里 —— 千万别删，删了等于清空
