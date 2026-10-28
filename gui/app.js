@@ -271,6 +271,18 @@ function openImportResult() {
   if (card) setFold(card, false);
 }
 
+function selectLedgerBatch(batch) {
+  const select = $('f-batch');
+  if (!select || !batch) return;
+  if (!Array.from(select.options || []).some((option) => option.value === batch)) {
+    const option = document.createElement('option');
+    option.value = batch;
+    option.textContent = batch;
+    select.appendChild(option);
+  }
+  select.value = batch;
+}
+
 /** 把当前页面所有卡片套上折叠状态。动态生成的卡（统计页）渲染完要再调一次。 */
 function applyFolds(root) {
   const saved = readFolds();
@@ -484,8 +496,13 @@ function hideModal() {
 
 /** 调后端接口的薄包装：出错统一转成 toast，不让界面炸掉 */
 async function call(name, ...args) {
+  call.lastError = '';
   const a = api();
-  if (!a) { toast('界面还没初始化好，请稍候…', 'warn'); return null; }
+  if (!a) {
+    call.lastError = '本地服务未连接';
+    toast('界面还没初始化好，请稍候…', 'warn');
+    return null;
+  }
   try {
     const r = await a[name](...args);
     call.lastError = '';
@@ -537,14 +554,30 @@ function initImportPage() {
     const note = $('src-note');
     note.className = 'src-note';
     note.textContent = '正在等待你选择文件夹…';
-    const path = await call('pick_folder', state.src || state.defaultSrc);
+    const pickButton = $('btn-pick');
+    pickButton.disabled = true;
+    let path;
+    try {
+      path = await call('pick_folder', state.src || state.defaultSrc);
+    } finally {
+      pickButton.disabled = false;
+    }
     // 服务器模式（Docker/NAS）没有目录选择框，后端会回 {server:true, hint:...}
     if (path && typeof path === 'object' && path.server) {
       note.className = 'src-note warn';
       note.textContent = path.hint || '服务器模式下请直接填写路径';
       return;
     }
-    if (!path) { checkSource(); return; }
+    if (!path) {
+      if (call.lastError) {
+        note.className = 'src-note err';
+        note.textContent = `选择失败：${call.lastError}；详情已记入运行日志`;
+      } else {
+        note.className = 'src-note warn';
+        note.textContent = '已取消选择，当前路径未更改';
+      }
+      return;
+    }
     state.src = path;
     $('src-path').value = path;
     localStorage.setItem(LS.lastSrc, path);
@@ -814,13 +847,32 @@ function checkSource() {
     note.textContent = '请先指定放发票的文件夹';
     return;
   }
+  note.className = 'src-note';
+  note.textContent = '正在检查文件夹…';
   clearTimeout(checkTimer);
   checkTimer = setTimeout(async () => {
     const a = api();
-    if (!a || !a.check_source) return;
+    if (!a || !a.check_source) {
+      if (path !== state.src) return;
+      note.className = 'src-note err';
+      note.textContent = '本地服务未连接，请通过启动器打开页面后再扫描';
+      return;
+    }
     let r;
-    try { r = await a.check_source(path); } catch (e) { return; }
-    if (!r || path !== state.src) return;            // 输入框已经改了，丢弃这次结果
+    try {
+      r = await a.check_source(path);
+    } catch (e) {
+      if (path !== state.src) return;
+      note.className = 'src-note err';
+      note.textContent = `扫描失败：${(e && e.message) || e}`;
+      return;
+    }
+    if (path !== state.src) return;                  // 输入框已经改了，丢弃这次结果
+    if (!r) {
+      note.className = 'src-note err';
+      note.textContent = '扫描失败：服务未返回目录检查结果，请重试';
+      return;
+    }
     if (!r.ok) {
       note.className = 'src-note err';
       note.textContent = '❌ ' + (r.msg || '路径不可用');
@@ -920,6 +972,8 @@ function onImportResult(res, silent) {
     + `共扫描 ${esc(res.files)} 个文件　·　新增 ${esc(res.added)} 条　·　台账现有 ${esc(res.total)} 行`
     + (res.patched ? `　·　补全老记录 ${esc(res.patched)} 条` : '')
     + (typeStr ? `<br><span style="color:var(--text-tertiary)">本次新增构成：${esc(typeStr)}</span>` : '');
+
+  if (Number(res.added) > 0 && res.batch) selectLedgerBatch(String(res.batch));
 
   // 需人工
   const manual = res.manual_list || [];
@@ -1143,8 +1197,8 @@ function deleteSelected() {
   showModal({
     title: `删除选中的 ${seqs.length} 条记录？`,
     html: `将从台账里删掉这 <b>${seqs.length}</b> 条记录，合计 <b>${money(selectedSum())}</b>。<br>
-           <span style="color:var(--text-secondary)">只删台账里的这一行记录，<b>不会动原始发票文件</b>。</span>`,
-    note: '删除前会自动备份一份台账到「台账备份」文件夹，反悔了可以从那儿恢复。',
+           <span style="color:var(--text-secondary)">只从台账移除记录，<b>原始发票文件不会删除</b>。</span>`,
+    note: '删除前会自动备份台账。原件仍在来源文件夹，下次扫描时可能重新入账。',
     okText: `删除 ${seqs.length} 条`,
     cancelText: '再想想',
     onOk: async () => {
@@ -1153,7 +1207,14 @@ function deleteSelected() {
       if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
       if (r.error) { toast('删除失败：' + r.error, 'err'); return; }
       state.sel.clear();
-      toast(`已删除 ${r.deleted} 条记录`, 'ok');
+      const deleted = Number(r.deleted) || 0;
+      if (!deleted) {
+        toast('没有删除记录，列表可能已过期，请刷新后重试', 'warn');
+      } else if (deleted < seqs.length) {
+        toast(`实际删除 ${deleted}/${seqs.length} 条，部分记录可能已被其他人改动`, 'warn');
+      } else {
+        toast(`已删除 ${deleted} 条记录`, 'ok');
+      }
       await loadLedger();
     },
   });
@@ -1655,7 +1716,7 @@ function deleteOneRow(seq) {
   showModal({
     title: '删除这一条记录？',
     html: `将删除台账第 <b>${esc(seq)}</b> 行：<br><b>${esc(String(label).slice(0, 70))}</b>`,
-    note: '删除前会自动备份台账；原始发票文件不受影响。',
+    note: '删除前会自动备份台账。原件仍在来源文件夹，下次扫描时可能重新入账。',
     okText: '删除',
     cancelText: '取消',
     onOk: async () => {
@@ -1663,7 +1724,9 @@ function deleteOneRow(seq) {
       const r = await call('delete_rows', [String(seq)]);
       if (!r) return;          // 失败原因 call() 已经弹过 toast，别再编一个
       if (r.error) { toast('删除失败：' + r.error, 'err'); return; }
-      toast('已删除 1 条记录', 'ok');
+      const deleted = Number(r.deleted) || 0;
+      if (deleted) toast(`已删除 ${deleted} 条记录`, 'ok');
+      else toast('没有删除记录，列表可能已过期，请刷新后重试', 'warn');
       await loadLedger();
     },
   });
@@ -2996,7 +3059,7 @@ async function renderMe() {
  * ---------------------------------------------------------------------
  * 「藏按钮不算数」说的是**后端**必须自己卡口（do_POST 里每个接口都会再查一次）；
  * 但反过来「按钮亮着、点了报错」同样是坑 —— 用户报的「删除选中报错」就是这么来的：
- * delete_rows 只有管理员能调，可这颗红按钮不论谁登录都显示。
+ * delete_rows / clear_ledger 的角色范围不同，按钮按后端 allowed 状态启停。
  * 权限表来自 whoami 的 allowed（就是后端 db.ROLE_ALLOW 那一份，不分家）。
  * ------------------------------------------------------------------- */
 const PERM_BTNS = {

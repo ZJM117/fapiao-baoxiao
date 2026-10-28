@@ -24,6 +24,8 @@ ui_port.txt
 *_预览.txt
 
 # Python
+.venv/
+.local-preview-data/
 __pycache__/
 *.pyc
 *.pyo

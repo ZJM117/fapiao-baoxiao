@@ -85,6 +85,7 @@ const mkFoldEl = (id) => {
 const box = new Function(
   src + '\n; return {showInvoiceDetail, renderLedgerBody, syncSelectionUI, onImportResult,'
       + ' currentFilter, filterSummary, deleteSelected, clearLedger, deleteOneRow,'
+      + ' selectLedgerBatch,'
       + ' renderOutputs, deleteOutput, clearOutputs, syncFmtPills, loadOutputs,'
       + ' missListHtml, state, renderReportRows, renderAlw, alwRowAmount, alwSum,'
       + ' alwPayload, reportMeta, syncKindPills, initAlw, stampTag, refreshSelected,'
@@ -369,10 +370,12 @@ box.state.sel = new Set(['5']);
 box.deleteSelected();
 chk(els['modal-title'].textContent.includes('删除选中的 1 条记录'), '删除选中要先确认',
   els['modal-title'].textContent);
-chk(els['modal-text'].innerHTML.includes('不会动原始发票文件'), '明确说明只删记录、不动原始文件');
+chk(els['modal-text'].innerHTML.includes('原始发票文件不会删除'), '明确说明只从台账移除、不删原始文件');
 chk(els['modal-text'].innerHTML.includes('79.00'), '确认框里带出这批合计金额',
   els['modal-text'].innerHTML);
-chk(els['modal-note'].innerHTML.includes('台账备份'), '提示会自动备份',
+chk(els['modal-note'].innerHTML.includes('自动备份台账')
+    && els['modal-note'].innerHTML.includes('下次扫描时可能重新入账'),
+  '说明自动备份及原件重扫后可能重新入账',
   els['modal-note'].innerHTML);
 box.state.sel = new Set();
 box.deleteSelected();
@@ -425,6 +428,12 @@ chk(els['modal-title'].textContent.includes('删除这一条记录'), '单条删
   els['modal-title'].textContent);
 chk(els['modal-text'].innerHTML.includes('26349119423005870096'), '确认框里带出这条的关键信息',
   els['modal-text'].innerHTML);
+const deleteOneSrc = src.slice(src.indexOf('function deleteOneRow'), src.indexOf('async function markSelected'));
+chk(deleteOneSrc.includes('Number(r.deleted)') && deleteOneSrc.includes('没有删除记录'),
+  '单条删除按后端实际结果提示，0 条时不误报成功');
+const deleteSelectedSrc = src.slice(src.indexOf('function deleteSelected'), src.indexOf('function clearLedger'));
+chk(deleteSelectedSrc.includes('deleted < seqs.length') && deleteSelectedSrc.includes('部分记录'),
+  '批量删除能提示并发变更导致的部分删除');
 
 console.log('— 报销单输出格式 —');
 chk(['pdf', 'xlsx', 'both'].every((f) => html.includes(`data-fmt="${f}"`)),
@@ -487,12 +496,18 @@ chk(src.includes('missing_list'), '结果里读了后端的 missing_list');
 chk(/o\.missing \? `少 \$\{o\.missing\} 张`/.test(src), '生成文件列表里标出「少 N 张」');
 
 console.log('— 入库结果卡片 —');
+els['f-batch'].options = [];
+els['f-batch'].appendChild = (option) => els['f-batch'].options.push(option);
 box.onImportResult({
   added: 5, in_ledger: 2, dup: 1, manual: 2, total: 88, files: 132, pending_amount: 1234.5,
+  batch: '第二批',
   patched: 3, by_type: { '火车票': 3, '发票': 2 },
   manual_list: [{ name: 'a.jpg', why: '没找到 20 位发票号码' }],
   dup_list: [{ no: '火车票', tip: '与第 3 行重复' }],
 }, true);
+chk(els['f-batch'].value === '第二批'
+    && els['f-batch'].options.some((option) => option.value === '第二批'),
+  '导入完成后自动切换到本次新增批次');
 chk(els['in-stats'].innerHTML.includes('新增入库'), '统计方块渲染');
 chk(els['in-hint'].innerHTML.includes('本次新增构成') && els['in-hint'].innerHTML.includes('火车票 3'),
   '新增构成按凭证类型拆分', els['in-hint'].innerHTML);
@@ -1065,9 +1080,8 @@ global.window.pywebview = { api: { list_jobs: async () => fakeJobs } };
   /* =====================================================================
    * 点不了的按钮不许亮着（2026-09-17 用户报「删除选中报错」）
    * ---------------------------------------------------------------------
-   * db.ROLE_ALLOW 里 delete_rows / clear_ledger 只有 admin 能调，可这两颗红按钮
-   * 对**所有角色**都显示 —— 业务员一点必然被后端挡住，用户看到的就是「报错」。
-   * 现在按 whoami().allowed 压灰 + 说明；真正的卡口仍然在后端 do_POST。
+   * delete_rows / clear_ledger 的角色范围不同：财务能删选中行但不能整本清空，
+   * 业务员两者都不能。按钮按 whoami().allowed 压灰，真正的卡口仍然在后端 do_POST。
    * ===================================================================*/
   console.log('— 权限：点不了的按钮压灰 —');
   {
@@ -1080,7 +1094,18 @@ global.window.pywebview = { api: { list_jobs: async () => fakeJobs } };
     chk(box.PERM_BTNS['btn-clear-ledger'] === 'clear_ledger',
       '「清空台账」登记为需要 clear_ledger 权限');
 
-    // ① 业务人员：两颗红按钮必须灰掉，并且说明为什么
+    // ① 财务审核员：可删选中行，但不能整本清空
+    setMe({ user: '财务', role: 'auditor', role_cn: '财务审核员', auth: true,
+            allowed: ['get_ledger', 'delete_rows', 'make_report'] });
+    box.applyPermissions();
+    chk(els['btn-del-sel'].disabled === false,
+      '财务审核员：「删除选中」可用');
+    chk(els['btn-clear-ledger'].disabled === true,
+      '财务审核员：「清空台账」被压灰');
+    chk(/没有这个权限/.test(els['btn-clear-ledger'].title || ''),
+      '财务不能清空时说明原因', els['btn-clear-ledger'].title);
+
+    // ② 业务人员：两颗红按钮必须灰掉，并且说明为什么
     setMe({ user: '王涛', role: 'biz', role_cn: '业务人员', auth: true,
             allowed: ['get_ledger', 'make_report'] });
     box.applyPermissions();
@@ -1093,7 +1118,7 @@ global.window.pywebview = { api: { list_jobs: async () => fakeJobs } };
     chk(hint.hidden === false && /业务人员/.test(hint.textContent || ''),
       '页面上有一句「当前登录是…灰掉的按钮不能用」', hint.textContent);
 
-    // ② 管理员：全部恢复可点，提示收起
+    // ③ 管理员：全部恢复可点，提示收起
     setMe({ user: '口令用户', role: 'admin', role_cn: '管理员', auth: true,
             allowed: Object.keys(box.PERM_BTNS).map((k) => box.PERM_BTNS[k])
               .concat(['get_ledger']) });
@@ -1102,7 +1127,7 @@ global.window.pywebview = { api: { list_jobs: async () => fakeJobs } };
     chk(els['btn-clear-ledger'].disabled === false, '管理员：「清空台账」恢复可点');
     chk(hint.hidden === true, '管理员：那句提示收起来');
 
-    // ③ 本机模式 / 老后端没下发 allowed → 不许乱灰（否则界面被锁死）
+    // ④ 本机模式 / 老后端没下发 allowed → 不许乱灰（否则界面被锁死）
     setMe({ auth: false });
     box.applyPermissions();
     chk(els['btn-del-sel'].disabled === false, '本机模式（没有登录这回事）：全部放行');

@@ -774,7 +774,7 @@ ROLES = {"admin": "管理员", "auditor": "财务审核员", "biz": "业务人�
 ROLE_ALLOW = {
     # 每种角色能调的后端方法（app_web 里逐个接口校验用的白名单）
     "admin":   None,                                  # None = 全部允许
-    "auditor": {"get_ledger", "mark_rows", "update_rows", "refresh_rows",
+    "auditor": {"get_ledger", "mark_rows", "update_rows", "refresh_rows", "delete_rows",
                 "traveler_review", "save_traveler_review", "get_phone_map", "set_phone_name",
                 "make_report", "report_persons", "merge_invoices", "export_summary",
                 "list_outputs", "delete_output", "open_folder", "open_file", "reveal",

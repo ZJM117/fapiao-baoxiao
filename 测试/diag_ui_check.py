@@ -178,7 +178,8 @@ def main():
     # 那次的两个根因都不是「后端坏了」：
     #   ① 三个日志闸门各管一段（_log_line 只写文件、Api._log 只进内存+stdout、
     #      do_POST 里的异常三个都不进）→ docker logs 永远空白；
-    #   ② delete_rows/clear_ledger 只有 admin 能调，可那两颗红按钮对所有角色都显示。
+    #   ② 两颗红按钮没有按 whoami().allowed 启停：财务可删台账行但不能清空，
+    #      业务人员两者都不能。界面不该让无权操作保持可点。
     # 这两条一旦被改回去，用户又会掉进「点了报错但查不到」的坑里，所以写死在这里守着。
     dockerfile = read(ROOT / "Dockerfile") if (ROOT / "Dockerfile").exists() else ""
     app = read(ROOT / "gui" / "app.js") if (ROOT / "gui" / "app.js").exists() else ""

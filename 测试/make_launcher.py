@@ -29,13 +29,34 @@ set "APPDIR=%~dp0"
 cd /d "%APPDIR%"
 
 rem ---- 1) 优先：用 Python 跑源码 ----
-set "PY=C:\Users\JM\.workbuddy\binaries\python\envs\gui\Scripts\pythonw.exe"
+set "PY=%APPDIR%.venv\Scripts\pythonw.exe"
 if exist "%PY%" if exist "%APPDIR%app_web.py" (
     start "" "%PY%" "%APPDIR%app_web.py"
     exit /b 0
 )
 
-rem ---- 2) 兜底：没有 Python 环境时用 exe（通配符定位，避开中文编码问题）----
+set "PY=%APPDIR%.venv\Scripts\python.exe"
+if exist "%PY%" if exist "%APPDIR%app_web.py" (
+    start "" "%PY%" "%APPDIR%app_web.py"
+    exit /b 0
+)
+
+set "PY="
+for /f "delims=" %%P in ('where pythonw.exe 2^>nul') do if not defined PY set "PY=%%P"
+if defined PY if exist "%APPDIR%app_web.py" (
+    start "" "%PY%" "%APPDIR%app_web.py"
+    exit /b 0
+)
+
+rem ---- 2) pythonw 不在 PATH 时用 python.exe，保留控制台便于排错 ----
+set "PY="
+for /f "delims=" %%P in ('where python.exe 2^>nul') do if not defined PY set "PY=%%P"
+if defined PY if exist "%APPDIR%app_web.py" (
+    start "" "%PY%" "%APPDIR%app_web.py"
+    exit /b 0
+)
+
+rem ---- 3) 兜底：没有 Python 环境时用 exe（通配符定位，避开中文编码问题）----
 set "EXE="
 for %%F in ("%APPDIR%*.exe") do if exist "%%~fF" if not defined EXE set "EXE=%%~fF"
 if defined EXE (

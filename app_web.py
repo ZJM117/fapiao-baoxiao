@@ -20,12 +20,15 @@
 为什么不用数据库：台账就是一个人人可看可改的 Excel 文件，单机自用不需要更重的东西。
 为什么用浏览器而不是套壳：见 发票管理 项目踩过的坑（WebView2 在本机不稳定）。
 """
+import base64
 import functools
 import http.server
 import inspect
 import json
 import os
+import queue
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -45,6 +48,7 @@ import db
 
 UI_PORT = PORT                      # 与「发票管理」错开，两个程序可以同时开；容器里由 FB_PORT 指定
 IDLE_TIMEOUT = 300                  # 界面 5 分钟没请求就自动退出，不留后台进程（服务器模式不启用）
+_UI_CALLS = queue.Queue()
 API_METHODS = {"poll", "whoami", "get_paths", "get_config", "set_config", "pick_folder",
                "check_source", "upload_info", "start_import", "get_ledger", "mark_rows",
                "update_rows", "refresh_rows", "delete_rows", "clear_ledger",
@@ -57,6 +61,118 @@ API_METHODS = {"poll", "whoami", "get_paths", "get_config", "set_config", "pick_
                "set_user_disabled", "force_logout",
                "open_folder", "open_file", "reveal", "shutdown",
                "job_retry", "job_cancel"}
+
+
+def _call_on_main_thread(fn):
+    request_id = getattr(fn, "_ui_request_id", "ui")
+    label = f"[UI请求 {request_id}]"
+    if threading.current_thread() is threading.main_thread():
+        _log_line(f"{label} 已在主线程，直接执行")
+        return fn()
+    done = threading.Event()
+    result = {"queued_at": time.monotonic()}
+    _log_line(f"{label} 已排队；请求线程={threading.get_ident()}")
+    _UI_CALLS.put((fn, done, result))
+    if not done.wait(timeout=90):
+        result["cancelled"] = True
+        _log_line(f"{label} 等待主线程超过 90 秒，已向浏览器返回超时", "ERROR")
+        raise TimeoutError("文件夹选择器等待主线程超过 90 秒，请查看 launch.log")
+    if "error" in result:
+        raise result["error"]
+    _log_line(f"{label} 请求线程收到结果；总等待={time.monotonic() - result['queued_at']:.2f}s")
+    return result.get("value")
+
+
+def _dispatch_ui_calls():
+    while True:
+        try:
+            fn, done, result = _UI_CALLS.get_nowait()
+        except queue.Empty:
+            return
+        request_id = getattr(fn, "_ui_request_id", "ui")
+        label = f"[UI请求 {request_id}]"
+        if result.get("cancelled"):
+            _log_line(f"{label} 请求已超时，跳过尚未开始的主线程调用", "WARN")
+            continue
+        queued_at = result.get("queued_at", time.monotonic())
+        started = time.monotonic()
+        _log_line(f"{label} 主线程开始处理；排队={started - queued_at:.2f}s；"
+                  f"线程={threading.get_ident()}")
+        try:
+            result["value"] = fn()
+            _log_line(f"{label} 主线程处理完成；耗时={time.monotonic() - started:.2f}s")
+        except Exception as e:
+            result["error"] = e
+            _log_line(f"{label} 主线程处理失败：{type(e).__name__}: {e}", "ERROR")
+            _log_line(f"{label} 堆栈：\n{traceback.format_exc()}", "ERROR")
+        finally:
+            done.set()
+
+
+def _clean_source_path(path):
+    """清理手动输入或从资源管理器复制时包在路径外面的引号。"""
+    value = str(path or "").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1].strip()
+    return value
+
+
+def _windows_folder_dialog(initial: str) -> str:
+    """在独立 STA PowerShell 进程中打开 Windows 原生文件夹选择器。"""
+    powershell = shutil.which("powershell.exe") or str(
+        Path(os.environ.get("WINDIR", r"C:\Windows"))
+        / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+    initial_b64 = base64.b64encode(str(initial).encode("utf-16le")).decode("ascii")
+    script = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+$initial = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('__INITIAL__'))
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+try {
+    $dialog.Description = '选择发票所在文件夹'
+    $dialog.ShowNewFolderButton = $false
+    $dialog.AutoUpgradeEnabled = $true
+    if ($initial -and (Test-Path -LiteralPath $initial -PathType Container)) {
+        $dialog.SelectedPath = $initial
+    }
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($dialog.SelectedPath)
+        [Console]::Out.WriteLine('FB_FOLDER:' + [Convert]::ToBase64String($bytes))
+    }
+} finally {
+    $dialog.Dispose()
+}
+""".replace("__INITIAL__", initial_b64)
+    encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    try:
+        completed = subprocess.run(
+            [powershell, "-NoProfile", "-STA", "-EncodedCommand", encoded_script],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="ascii",
+            errors="replace",
+            timeout=90,
+            check=False,
+            startupinfo=startupinfo,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise TimeoutError("Windows 文件夹选择框等待超过 90 秒") from e
+    if completed.returncode:
+        raise RuntimeError(
+            f"Windows 文件夹选择器启动失败（PowerShell code {completed.returncode}）")
+    for line in completed.stdout.splitlines():
+        if line.startswith("FB_FOLDER:"):
+            try:
+                return base64.b64decode(line.removeprefix("FB_FOLDER:")).decode("utf-8")
+            except (ValueError, UnicodeDecodeError) as e:
+                raise RuntimeError("Windows 文件夹选择器返回了无效路径") from e
+    return ""
 
 
 def _allowed_methods(role: str) -> list:
@@ -799,7 +915,10 @@ class Api:
 
     def set_config(self, patch: dict = None):
         cfg = load_config()
-        cfg.update(patch or {})
+        patch = dict(patch or {})
+        if "source" in patch:
+            patch["source"] = _clean_source_path(patch["source"])
+        cfg.update(patch)
         save_config(cfg)
         self._cfg = cfg
         return cfg
@@ -807,7 +926,8 @@ class Api:
     def pick_folder(self, initial: str = ""):
         """弹系统目录选择框（用户点了按钮才弹，属于用户主动操作）
 
-        容器/NAS 里没有图形界面，也弹不出来 —— 直接告诉用户手输路径（界面上本来就有输入框）。
+        Windows 使用独立 STA PowerShell 进程显示系统选择框，避免 Tk 和主线程消息泵冲突。
+        容器/NAS 里没有图形界面 —— 直接告诉用户手输路径。
         """
         if SERVER_MODE:
             self._log("ℹ️ 服务器模式下没有目录选择框，请直接在路径框里填票据文件夹"
@@ -815,24 +935,62 @@ class Api:
             return {"server": True,
                     "hint": "服务器模式下弹不出目录选择框，请直接在路径框里填票据文件夹"
                             "（容器内路径，例如 /票据）"}
-        import tkinter as tk
-        from tkinter import filedialog
-        self._log("打开文件夹选择框…")
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        try:
-            path = filedialog.askdirectory(initialdir=initial or str(Path.home()),
-                                           title="选择发票所在文件夹")
-        finally:
-            root.destroy()
-        return path or ""
+        request_id = f"{int(time.time() * 1000)}-{threading.get_ident()}"
+        self._log(f"[UI请求 {request_id}] 收到文件夹选择请求；"
+                  f"调用线程={threading.get_ident()}；初始目录已提供={bool(initial)}")
+
+        if os.name == "nt":
+            self._log(f"[UI请求 {request_id}] 启动 Windows STA 文件夹选择器")
+            selected = _windows_folder_dialog(initial or str(Path.home()))
+            self._log(f"[UI请求 {request_id}] Windows 选择器已返回；"
+                      f"结果={'已选择' if selected else '用户取消'}")
+            return selected
+
+        def choose():
+            root = None
+            try:
+                import tkinter as tk
+                from tkinter import filedialog
+
+                self._log(f"[UI请求 {request_id}] tkinter 导入成功；"
+                          f"Tk={getattr(tk, 'TkVersion', 'unknown')}；"
+                          f"主线程={threading.current_thread() is threading.main_thread()}")
+                root = tk.Tk()
+                self._log(f"[UI请求 {request_id}] Tk 根窗口创建成功")
+                root.withdraw()
+                root.attributes("-topmost", True)
+                root.update_idletasks()
+                self._log(f"[UI请求 {request_id}] 即将显示系统选择框")
+                selected = filedialog.askdirectory(
+                    initialdir=initial or str(Path.home()),
+                    title="选择发票所在文件夹",
+                    parent=root)
+                self._log(f"[UI请求 {request_id}] 系统选择框已返回；"
+                          f"结果={'已选择' if selected else '用户取消'}")
+                return selected
+            except Exception as e:
+                self._log(f"[UI请求 {request_id}] 选择框异常：{type(e).__name__}: {e}")
+                raise
+            finally:
+                if root is not None:
+                    try:
+                        root.destroy()
+                        self._log(f"[UI请求 {request_id}] Tk 根窗口已销毁")
+                    except Exception as e:
+                        self._log(f"[UI请求 {request_id}] 销毁 Tk 根窗口失败："
+                                  f"{type(e).__name__}: {e}")
+
+        choose._ui_request_id = request_id
+        selected = _call_on_main_thread(choose) or ""
+        self._log(f"[UI请求 {request_id}] 选择请求完成；"
+                  f"结果={'已选择' if selected else '用户取消'}")
+        return selected
 
     def check_source(self, path: str = ""):
         """统计这个文件夹里有多少个可识别的凭证文件（发票 + 行程单 + 图片）"""
-        p = Path(path or load_config().get("source", ""))
+        p = Path(_clean_source_path(path or load_config().get("source", ""))).expanduser()
         if not p.exists() or not p.is_dir():
-            return {"ok": False, "msg": "路径不存在或不是文件夹", "files": 0}
+            return {"ok": False, "msg": f"路径不存在或不是文件夹：{p}", "files": 0}
         import invparse
         files = invparse.collect_files(p, load_config().get("recursive", True))
         kinds = {}
@@ -893,7 +1051,7 @@ class Api:
             #    曾经这里只读 cfg["source"]：用户把路径框改成另一个目录、点入库，
             #    实际扫的却还是老目录 —— 弹窗和日志都写着新路径，台账里进来的却是
             #    老目录那 80 多条，用户会以为"删了又全回来了 / 新的一个没入"。
-            src = str(source or cfg.get("source", "")).strip().strip('"').strip()
+            src = _clean_source_path(source or cfg.get("source", ""))
             root = Path(src)
             if recursive is None:
                 recursive = bool(cfg.get("recursive", True))
@@ -980,6 +1138,7 @@ class Api:
             self._set_result({"added": added, "in_ledger": len(res["in_ledger"]),
                             "dup": len(res["dup"]), "manual": len(res["manual"]),
                             "patched": patched, "source": str(root),
+                            "batch": batch,
                             "total": len(res["all"]), "files": len(files),
                             "pending_amount": round(total_sum, 2),
                             "by_type": {t: v["n"] for t, v in
@@ -2785,7 +2944,8 @@ def main():
         pass
     try:
         while not stop.is_set() and not api.exit_flag.is_set():
-            time.sleep(0.4)
+            _dispatch_ui_calls()
+            time.sleep(0.1)
     except KeyboardInterrupt:
         _log_line("收到 Ctrl+C")
     try:

@@ -7,7 +7,8 @@
 
   · 没有账号时用访问口令自动建管理员（不然部署完 NAS 人进不去）
   · 用户名 + 密码登录，会话里记住「是谁」
-  · 角色卡口：业务人员不能清空台账、只读用户不能出单据、非管理员看不到用户列表
+  · 角色卡口：财务可删选中行但不能清空，业务人员不能删行、只读用户不能出单据
+    非管理员看不到用户列表
   · 改密码 / 停用 / 强制退出后，旧的会话立刻作废（服务端作废，不只是丢 Cookie）
   · 口令哈希绝不下发到浏览器
 
@@ -146,17 +147,21 @@ try:
     r = api_call("create_user", "lisi", "123", "biz", cookie=ck)
     chk("至少 6 位" in str(r.get("error") or ""), "弱密码被拦", r.get("error"))
     api_call("create_user", "lisi", "lisi123456", "viewer", "李四", cookie=ck)
+    r = api_call("create_user", "caiwu", "caiwu123456", "auditor", "财务", "财务部", cookie=ck)
+    chk(r.get("ok"), "管理员能新增财务审核员", r)
 
     rows = api_call("list_users", cookie=ck).get("rows") or []
     chk(all("pw_hash" not in u for u in rows), "用户列表里没有口令哈希（不下发）")
     chk(any(u.get("role_cn") == "业务人员" for u in rows), "带上了中文角色名")
+    chk(any(u.get("role_cn") == "财务审核员" for u in rows), "财务账号角色名正确")
 
     # ==============================================================
     section("四、角色卡口（核心）")
     # ==============================================================
     zk = ck_of(login("xiaozhang", "zhang123456"))
     lk = ck_of(login("lisi", "lisi123456"))
-    chk(bool(zk) and bool(lk), "两个同事都登录成功")
+    fk = ck_of(login("caiwu", "caiwu123456"))
+    chk(bool(zk) and bool(lk) and bool(fk), "业务、只读、财务账号都登录成功")
 
     r = api_call("get_ledger", cookie=zk)
     chk("rows" in r, "业务人员能看台账", list(r)[:4])
@@ -171,6 +176,12 @@ try:
     chk("权限不足" in str(r.get("error") or ""), "业务人员看不到用户列表", r.get("error"))
     r = api_call("set_config", {"x": 1}, cookie=zk)
     chk("权限不足" in str(r.get("error") or ""), "业务人员不能改配置", r.get("error"))
+
+    r = api_call("delete_rows", [999999], cookie=fk)
+    chk(r.get("deleted") == 0 and "权限不足" not in str(r.get("error") or ""),
+        "财务审核员能调用删台账行接口", r)
+    r = api_call("clear_ledger", cookie=fk)
+    chk("权限不足" in str(r.get("error") or ""), "财务审核员不能清空整本台账", r.get("error"))
 
     r = api_call("make_report", [], cookie=lk)
     chk("权限不足" in str(r.get("error") or ""), "只读用户不能出报销单", r.get("error"))
@@ -224,14 +235,24 @@ try:
         "whoami 说得出「我是谁、什么角色」", w)
     chk(w.get("can", {}).get("clear_ledger") is False,
         "whoami 的 can 表：业务人员不能清空台账（界面据此藏按钮）")
+    chk(w.get("can", {}).get("delete_rows") is False,
+        "whoami 的 can 表：业务人员不能删台账行")
     chk(w.get("can", {}).get("start_import") is True, "也说得出他能入库")
     chk(w.get("can", {}).get("list_users") is False, "也说得出他看不了用户管理")
+
+    fw = api_call("whoami", cookie=fk)
+    chk(fw.get("role") == "auditor"
+        and fw.get("can", {}).get("delete_rows") is True
+        and fw.get("can", {}).get("clear_ledger") is False,
+        "whoami 的 can 表：财务可删选中行、不可清空台账", fw.get("can"))
+    chk(fw.get("can", {}).get("start_import") is False,
+        "财务审核员不能入库建账")
 
     info = api_call("ledger_db_info", cookie=zk)
     chk(info.get("ok") and "发票台账.db" in str(info.get("db")),
         "数据库状态查得到（设置页那块用它）", info)
     chk(info.get("invoices") == 0, "刚建库，台账 0 行", info.get("invoices"))
-    chk(info.get("users") == 3, "账号数对得上（admin + 小张 + 李四）", info.get("users"))
+    chk(info.get("users") == 4, "账号数对得上（admin + 小张 + 李四 + 财务）", info.get("users"))
 
     au = api_call("audit_list", 50, cookie=zk)
     chk("权限不足" in str(au.get("error") or ""),

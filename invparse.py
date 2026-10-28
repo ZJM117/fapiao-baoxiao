@@ -289,7 +289,7 @@ def parse_xml_bytes(data: bytes, src: Path = None, src_kind: str = "xml") -> dic
 
 
 # ---------------------------------------------------------------- PDF 文本
-def _pdf_text(path: Path) -> str:
+def _pdf_text(path: Path, diagnostics: list | None = None) -> str:
     """
     取 PDF 文本层。
 
@@ -297,19 +297,29 @@ def _pdf_text(path: Path) -> str:
     直接抛 `PdfReadError: More than one /FontFile found` —— 铁路电子客票 PDF 就长这样，
     所以必须保留 pdfminer 这条兜底链路，实测它能完整读出车次/席别/票价。
     """
+    errors = diagnostics if diagnostics is not None else []
     try:
         from pypdf import PdfReader
-        r = PdfReader(str(path))
-        t = "\n".join((pg.extract_text() or "") for pg in r.pages)
-        if t.strip():
-            return t
-    except Exception:
-        pass
+    except ImportError:
+        errors.append("pypdf未安装")
+    else:
+        try:
+            r = PdfReader(str(path))
+            t = "\n".join((pg.extract_text() or "") for pg in r.pages)
+            if t.strip():
+                return t
+        except Exception as e:
+            errors.append(f"pypdf读取失败：{type(e).__name__}")
     try:
         from pdfminer.high_level import extract_text
-        return extract_text(str(path)) or ""
-    except Exception:
-        return ""
+    except ImportError:
+        errors.append("pdfminer.six未安装")
+    else:
+        try:
+            return extract_text(str(path)) or ""
+        except Exception as e:
+            errors.append(f"pdfminer读取失败：{type(e).__name__}")
+    return ""
 
 
 def _despace(s: str) -> str:
@@ -1128,11 +1138,24 @@ def _trip_from_remark(text):
 
 # ---------------------------------------------------------------- PDF 总入口
 def parse_pdf(path: Path) -> dict:
-    raw = _pdf_text(path)
+    pdf_diagnostics = []
+    raw = _pdf_text(path, pdf_diagnostics)
     if not raw.strip():
         rec = _blank(str(path), "pdf-img", T_IMAGE)
-        rec["kind"] = "图片型 PDF"
-        rec["warn"].append("PDF 没有文字层（是扫描件或截图），金额等信息要人工补")
+        missing = {"pypdf未安装", "pdfminer.six未安装"}
+        if missing.issubset(set(pdf_diagnostics)):
+            rec["kind"] = "PDF 解析依赖缺失"
+            rec["warn"].append(
+                "当前 Python 环境缺少 pypdf 和 pdfminer.six，不能识别 PDF；"
+                "请运行 python -m pip install -r requirements.txt 后重启程序")
+        elif pdf_diagnostics:
+            rec["kind"] = "PDF 文本提取失败"
+            rec["warn"].append("PDF 文本提取失败（"
+                               + "；".join(pdf_diagnostics)
+                               + "），请重新安装依赖或检查 PDF 文件")
+        else:
+            rec["kind"] = "图片型 PDF"
+            rec["warn"].append("PDF 没有文字层（是扫描件或截图），金额等信息要人工补")
         return rec
     rlines = [x.strip() for x in raw.splitlines() if x.strip()]
     lines = [_despace(x) for x in raw.splitlines()]
